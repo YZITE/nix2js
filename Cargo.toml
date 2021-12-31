@@ -1,0 +1,11 @@
+# NOTE: do not use a workspace here, because we need to specify a special
+# profile for the WASM release target...
+
+[package]
+name = "nix2js"
+version = "0.1.0"
+edition = "2021"
+license = "LGPL-2.1+"
+
+[dependencies]
+rnix = "0.10"
