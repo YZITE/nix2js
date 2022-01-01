@@ -55,21 +55,21 @@ impl Context<'_> {
         match vn {
             "builtins" => {
                 // keep the builtins informed about the line number
-                format!("({}({}))", NIX_BUILTINS_RT, txtrng_to_lineno(txtrng))
+                format!("{}({})", NIX_BUILTINS_RT, txtrng_to_lineno(txtrng))
             }
             "derivation" => {
                 // aliased name for derivation builtin
                 format!(
-                    "({}({}).derivation)",
+                    "{}({}).derivation",
                     NIX_BUILTINS_RT,
-                    txtrng_to_lineno(txtrng)
+                    txtrng_to_lineno(txtrng),
                 )
             }
             _ => match self.vars.iter().rev().find(|(ref i, _)| vn == i) {
                 Some((_, x)) => match x {
                     Sv::LambdaArg => format!("{}{}", NIX_LAMBDA_ARG_PFX, vn),
                 },
-                None => format!("({}(\"{}\"))", NIX_IN_SCOPE, escape_str(vn)),
+                None => format!("{}(\"{}\")", NIX_IN_SCOPE, escape_str(vn)),
             },
         }
     }
@@ -125,21 +125,21 @@ impl Context<'_> {
 
         match x {
             Pt::Apply(app) => {
-                apush!("((");
+                apush!("(");
                 rtv!(app.lambda(), "lambda for application");
                 apush!(")(");
                 rtv!(app.value(), "value for application");
-                apush!("))");
+                apush!(")");
             }
 
             Pt::Assert(art) => {
-                apush!("((function() { ");
+                apush!("(function() { ");
                 apush!(NIX_BUILTINS_RT);
                 apush!(".assert(");
                 rtv!(art.condition(), "condition for assert");
                 apush!("); return (");
                 rtv!(art.body(), "body for assert");
-                apush!("); })())");
+                apush!("); })()");
             }
 
             Pt::Key(key) => {
@@ -170,7 +170,7 @@ impl Context<'_> {
             Pt::Ident(id) => apush!(&self.translate_ident(&id)),
 
             Pt::IfElse(ie) => {
-                apush!("(new ");
+                apush!("new ");
                 apush!(NIX_LAZY);
                 apush!("(function() { let nixRet = undefined; if(");
                 apush!(NIX_FORCE);
@@ -180,11 +180,11 @@ impl Context<'_> {
                 rtv!(ie.body(), "if-body for if-else");
                 apush!("; } else { nixRet = ");
                 rtv!(ie.else_body(), "else-body for if-else");
-                apush!("; }}))");
+                apush!("; }})");
             }
 
             Pt::Select(sel) => {
-                apush!("((");
+                apush!("(");
                 rtv!(sel.set(), "set for select");
                 apush!(")[");
                 if let Some(idx) = sel.index() {
@@ -201,7 +201,7 @@ impl Context<'_> {
                         txtrng, "index for selectr"
                     )]);
                 }
-                apush!("])");
+                apush!("]");
             }
 
             Pt::Inherit(inh) => {
@@ -214,7 +214,7 @@ impl Context<'_> {
                 //apush!("})())");
 
                 if let Some(inhf) = inh.from() {
-                    apush!("((function(){ let nixInhR = ");
+                    apush!("(function(){ let nixInhR = ");
                     rtv!(inhf.inner(), "inner for inherit-from");
                     apush!(";");
                     for id in inh.idents() {
@@ -228,7 +228,7 @@ impl Context<'_> {
                         apush!(&idesc);
                         apush!("\"];));");
                     }
-                    apush!("})())");
+                    apush!("})()");
                 } else {
                     for id in inh.idents() {
                         let idas = id.as_str();
@@ -348,7 +348,6 @@ impl Context<'_> {
             }
 
             Pt::OrDefault(od) => {
-                apush!("(");
                 apush!(NIX_OR_DEFAULT);
                 apush!("(new ");
                 apush!(NIX_LAZY);
@@ -363,7 +362,7 @@ impl Context<'_> {
                 apush!(NIX_DELAY);
                 apush!("(");
                 rtv!(od.default(), "or-default without default");
-                apush!(")))");
+                apush!("))");
             }
 
             Pt::Paren(p) => rtv!(p.inner(), "inner for paren"),
