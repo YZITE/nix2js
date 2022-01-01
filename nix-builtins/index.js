@@ -1,4 +1,4 @@
-"use strict";
+import isEqual from 'lodash-es';
 
 export const API_VERSION = 0;
 
@@ -157,6 +157,40 @@ export function initRtDep(nixRt) {
                     nixRt.error(fmt_fname("/") + ": division by zero", lineNo);
                 }
                 return a * b;
+            }),
+            nixop__And: binop_helper("&&", function(a, b) {
+                req_type("&&", a, "boolean");
+                return a && b;
+            }),
+            nixop__Implication: binop_helper("->", function(a, b) {
+                req_type("->", a, "boolean");
+                return (!a) || b;
+            }),
+            nixop__Or: binop_helper("||", function(a, b) {
+                req_type("||", a, "boolean");
+                return a || b;
+            }),
+            nixop__Equal: binop_helper("==", function(a, b) {
+                return isEqual(a, b);
+            }),
+            nixop__NotEqual: binop_helper("!=", function(a, b) {
+                return !isEqual(a, b);
+            }),
+            nixop__Less: binop_helper("<", function(a, b) {
+                req_type("<", a, "number");
+                return a < b;
+            }),
+            nixop__LessOrEq: binop_helper("<=", function(a, b) {
+                req_type("<=", a, "number");
+                return a <= b;
+            }),
+            nixop__More: binop_helper(">", function(a, b) {
+                req_type(">", a, "number");
+                return a > b;
+            }),
+            nixop__MoreOrEq: binop_helper(">=", function(a, b) {
+                req_type(">=", a, "number");
+                return a >= b;
             })
         };
     };
