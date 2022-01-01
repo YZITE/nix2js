@@ -161,6 +161,8 @@ impl Context<'_> {
                 apush!("); })()");
             }
 
+            Pt::AttrSet(_) => unimplemented!(),
+
             Pt::BinOp(bo) => {
                 if let Some(op) = bo.operator() {
                     use BinOpKind as Bok;
@@ -283,6 +285,8 @@ impl Context<'_> {
                 apush!("]");
             }
 
+            Pt::KeyValue(kv) => unreachable!("standalone key-value not supported: {:?}", kv),
+
             Pt::Lambda(lam) => {
                 if let Some(x) = lam.arg() {
                     // FIXME: use guard to truncate vars
@@ -319,7 +323,7 @@ impl Context<'_> {
                                         zas = z.as_str(),
                                         zname = self.translate_ident(&z)
                                     ));
-                                    self.translate_node(zdfl);
+                                    self.translate_node(zdfl)?;
                                     apush!(");");
                                 } else {
                                     // TODO: adjust error message to what Nix currently issues.
@@ -410,15 +414,19 @@ impl Context<'_> {
                     od.index().map(|i| i.node().clone()),
                     "or-default without indexing operation"
                 );
-                apush!(&format!(
-                    ")),{delay}(",
-                    delay = NIX_DELAY,
-                ));
+                apush!(&format!(")),{delay}(", delay = NIX_DELAY));
                 rtv!(od.default(), "or-default without default");
                 apush!("))");
             }
 
             Pt::Paren(p) => rtv!(p.inner(), "inner for paren"),
+            Pt::PathWithInterpol(p) => {
+                unreachable!("standalone path-with-interpolation not supported: {:?}", p)
+            }
+            Pt::Pattern(p) => unreachable!("standalone pattern not supported: {:?}", p),
+            Pt::PatBind(p) => unreachable!("standalone pattern @ bind not supported: {:?}", p),
+            Pt::PatEntry(p) => unreachable!("standalone pattern entry not supported: {:?}", p),
+
             Pt::Root(r) => rtv!(r.inner(), "inner for root"),
 
             Pt::Select(sel) => {
@@ -439,7 +447,21 @@ impl Context<'_> {
                 apush!("]");
             }
 
-            _ => unimplemented!(),
+            Pt::Str(s) => unreachable!("standalone string not supported: {:?}", s),
+
+            Pt::UnaryOp(uo) => {
+                use UnaryOpKind as Uok;
+                match uo.operator() {
+                    Uok::Invert | Uok::Negate => {}
+                }
+                apush!(&format!("{}.nixuop__{:?}(", NIX_BUILTINS_RT, uo.operator()));
+                rtv!(uo.value(), "value for unary-op");
+                apush!(")");
+            }
+
+            Pt::Value(_) => unimplemented!(),
+
+            Pt::With(_) => unimplemented!(),
         }
 
         Ok(())
