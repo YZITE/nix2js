@@ -20,7 +20,7 @@
     "package manager"
   ],
   "author": "Yzix project developers",
-  "license": "ISC",
+  "license": "LGPL-2.1+",
   "bugs": {
     "url": "https://github.com/YZITE/nix2js/issues"
   },

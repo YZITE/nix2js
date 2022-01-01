@@ -9,4 +9,4 @@ license = "LGPL-2.1+"
 
 [dependencies]
 rnix = "0.10"
-serde_json = "1.0.74"
+serde_json = "1.0"
