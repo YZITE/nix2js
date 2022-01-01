@@ -14,7 +14,6 @@
  be the objects/namespace of all exported objects of the npm package `nix-builtins`.
 **/
 use rnix::{types::*, SyntaxNode as NixNode};
-use std::collections::HashMap;
 
 const NIX_BUILTINS_RT: &str = "nixBltiRT";
 const NIX_LAZY: &str = "nixBlti.Lazy";
@@ -44,9 +43,10 @@ fn escape_str(s: &str) -> String {
 impl Context<'_> {
     fn txtrng_to_lineno(&self, txtrng: rnix::TextRange) -> usize {
         let bytepos: usize = txtrng.start().into();
-        inp.char_indices()
-            .take_while(|(idx, _)| idx <= bytepos)
-            .filter(|(_, c)| c == '\n')
+        self.inp
+            .char_indices()
+            .take_while(|(idx, _)| *idx <= bytepos)
+            .filter(|(_, c)| *c == '\n')
             .count()
     }
 
@@ -55,14 +55,14 @@ impl Context<'_> {
         match vn {
             "builtins" => {
                 // keep the builtins informed about the line number
-                format!("{}({})", NIX_BUILTINS_RT, txtrng_to_lineno(txtrng))
+                format!("{}({})", NIX_BUILTINS_RT, self.txtrng_to_lineno(txtrng))
             }
             "derivation" => {
                 // aliased name for derivation builtin
                 format!(
                     "{}({}).derivation",
                     NIX_BUILTINS_RT,
-                    txtrng_to_lineno(txtrng),
+                    self.txtrng_to_lineno(txtrng),
                 )
             }
             _ => match self.vars.iter().rev().find(|(ref i, _)| vn == i) {
@@ -88,7 +88,11 @@ impl Context<'_> {
         }
     }
 
-    fn translate_let(&mut self, node: &dyn EntryHolder, body: NixNode) -> Result<(), Vec<String>> {
+    fn translate_let<EH: EntryHolder>(
+        &mut self,
+        node: &EH,
+        body: NixNode,
+    ) -> Result<(), Vec<String>> {
         unimplemented!()
     }
 
@@ -117,7 +121,13 @@ impl Context<'_> {
         macro_rules! rtv {
             ($x:expr, $desc:expr) => {{
                 match $x {
-                    None => return Err(vec![format!("{:?}: {} missing", txtrng, $desc)]),
+                    None => {
+                        return Err(vec![format!(
+                            "line {}: {} missing",
+                            self.txtrng_to_lineno(txtrng),
+                            $desc
+                        )])
+                    }
                     Some(x) => self.translate_node(x)?,
                 }
             }};
@@ -249,7 +259,7 @@ impl Context<'_> {
                     // FIXME: use guard to truncate vars
                     let cur_lamstk = self.vars.len();
                     apush!("(function(");
-                    if let Some(y) = Ident::cast(x) {
+                    if let Some(y) = Ident::cast(x.clone()) {
                         let yas = y.as_str();
                         self.vars.push((yas.to_string(), ScopedVar::LambdaArg));
                         apush!(&self.translate_ident(&y));
@@ -263,7 +273,7 @@ impl Context<'_> {
                         } else {
                             NIX_LAMBDA_BOUND.to_string()
                         };
-                        apush!(format!(
+                        apush!(&format!(
                             "{arg}){{let {arg}={}({arg});",
                             NIX_FORCE,
                             arg = argname
@@ -275,7 +285,7 @@ impl Context<'_> {
                                     .push((z.as_str().to_string(), ScopedVar::LambdaArg));
                                 if let Some(zdfl) = i.default() {
                                     apush!(&format!(
-                                        "let {zname}=({arg}.{zas} !== undefined)?({arg.}{zas}):(",
+                                        "let {zname}=({arg}.{zas} !== undefined)?({arg}.{zas}):(",
                                         arg = argname,
                                         zas = z.as_str(),
                                         zname = self.translate_ident(&z)
@@ -315,23 +325,40 @@ impl Context<'_> {
 
             Pt::LegacyLet(l) => self.translate_let(
                 &l,
-                l.entries().find(|i| {
-                    {
-                        let kp = i.key().path().collect();
+                l.entries()
+                    .find(|i| {
+                        let kp: Vec<_> = if let Some(key) = i.key() {
+                            key.path().collect()
+                        } else {
+                            return false;
+                        };
                         if let [name] = &kp[..] {
-                            if let Some(name) = Ident::cast(name) {
-                                if name == "body" {
+                            if let Some(name) = Ident::cast(name.clone()) {
+                                if name.as_str() == "body" {
                                     return true;
                                 }
                             }
                         }
                         false
-                    }
-                    .ok_or_else(|| vec!["legacy let { ... } without body assignment".to_string()])
-                }),
+                    })
+                    .and_then(|i| i.value())
+                    .ok_or_else(|| {
+                        vec![format!(
+                            "line {}: legacy let {{ ... }} without body assignment",
+                            self.txtrng_to_lineno(l.node().text_range())
+                        )]
+                    })?,
             )?,
 
-            Pt::LetIn(l) => self.translate_let(&l, l.body())?,
+            Pt::LetIn(l) => self.translate_let(
+                &l,
+                l.body().ok_or_else(|| {
+                    vec![format!(
+                        "line {}: let ... in ... without body",
+                        self.txtrng_to_lineno(l.node().text_range())
+                    )]
+                })?,
+            )?,
 
             Pt::List(l) => {
                 apush!("[");
@@ -355,7 +382,7 @@ impl Context<'_> {
                 apush!(NIX_FORCE);
                 apush!("(");
                 rtv!(
-                    od.index().map(|i| i.node()),
+                    od.index().map(|i| i.node().clone()),
                     "or-default without indexing operation"
                 );
                 apush!(")),");
@@ -368,7 +395,7 @@ impl Context<'_> {
             Pt::Paren(p) => rtv!(p.inner(), "inner for paren"),
             Pt::Root(r) => rtv!(r.inner(), "inner for root"),
 
-            _ => unimplemented(),
+            _ => unimplemented!(),
         }
 
         Ok(())
