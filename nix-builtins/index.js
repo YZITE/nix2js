@@ -28,6 +28,11 @@ export function force(value) {
     }
 }
 
+// this ensures correct evaluation when evaluating lazy values
+export function mkLazy(maker) {
+    return Lazy(()=>force(maker()));
+}
+
 export function delay(value) {
     if (!(value instanceof Lazy)) {
         return Lazy(()=>value);
@@ -71,33 +76,49 @@ export function orDefault(lazy_selop, lazy_dfl) {
 
 export function initRtDep(nixRt) {
     return function(lineNo) {
-        function binop_helper(name, f) {
-            return function(a) {
+        function fmt_fname(fname) {
+            if (fname.length != 1) {
+                return fname;
+            } else {
+                return "operator " + fname;
+            }
+        }
+
+        function binop_helper(fname, f) {
+            return function(a, c) {
+                let b = force(a);
+                let d = force(c);
+                let tb = typeof b;
+                let td = typeof d;
+                if (tb === td) {
+                    return f(b, d);
+                } else {
+                    nixRt.error(fmt_fname(fname) + ": given types mismatch (" + tb + " != " + td + ")", lineNo);
+                }
+            };
+        }
+
+        function req_type(fname, x, xptype) {
+            if (typeof x !== xptype) {
+                nixRt.error(fmt_fname(fname) + ": invalid input type (" + typeof x + "), expected (" + xptype + ")", lineNo);
+            }
+        }
+
+        return {
+            add: function(a) {
                 return function(c) {
                     let b = force(a);
                     let d = force(c);
                     let tb = typeof b;
                     let td = typeof d;
                     if (tb === td) {
-                        return f(b, d);
+                        req_type("builtins.add", b, "number");
+                        return b + d;
                     } else {
-                        nixRt.error("builtins." + name + ": given types mismatch (" + tb + " != " + td + ")", lineNo);
+                        nixRt.error("builtins.add: given types mismatch (" + tb + " != " + td + ")", lineNo);
                     }
                 };
-            };
-        }
-
-        function req_number(opname, a) {
-            if (typeof a !== 'number') {
-                nixRt.error("builtins." + opname + ": invalid input type (" + typeof a + ")", lineNo);
-            }
-        }
-
-        return {
-            add: binop_helper("add", function(a, b) {
-                req_number("add", a);
-                return a + b;
-            }),
+            },
             assert: function(lineNo, cond) {
                 let cond2 = force(cond);
                 if (typeof cond2 !== 'boolean') {
@@ -106,21 +127,35 @@ export function initRtDep(nixRt) {
                     nixRt.error("assertion failed", lineNo);
                 }
             },
-            nixop__Concat: binop_helper("++", function(a, b) {
+            nixop__Concat: binop_helper("operator ++", function(a, b) {
                 if (typeof a !== 'object') {
-                    nixRt.error("builtins.++: invalid input type (" + typeof cond2 + ")", lineNo);
+                    nixRt.error("operator ++: invalid input type (" + typeof a + ")", lineNo);
                 }
                 return a.concat(b);
+            }),
+            // nixop__IsSet is implemented via .hasOwnProperty
+            nixop__Update: binop_helper("operator //", function(a, b) {
+                if (typeof a !== 'object') {
+                    nixRt.error("operator //: invalid input type (" + typeof a + ")", lineNo);
+                }
+                return Object.assign({}, a, b);
             }),
             nixop__Add: binop_helper("+", function(a, b) {
                 return a + b;
             }),
             nixop__Sub: binop_helper("-", function(a, b) {
-                req_number("-", a);
+                req_type("-", a, "number");
                 return a - b;
             }),
             nixop__Mul: binop_helper("*", function(a, b) {
-                req_number("*", a);
+                req_type("*", a, "number");
+                return a * b;
+            }),
+            nixop__Div: binop_helper("/", function(a, b) {
+                req_type("/", a, "number");
+                if (!b) {
+                    nixRt.error(fmt_fname("/") + ": division by zero", lineNo);
+                }
                 return a * b;
             })
         };

@@ -17,6 +17,7 @@ use rnix::{types::*, SyntaxNode as NixNode};
 
 const NIX_BUILTINS_RT: &str = "nixBltiRT";
 const NIX_LAZY: &str = "nixBlti.Lazy";
+const NIX_MKLAZY: &str = "nixBlti.mkLazy";
 const NIX_DELAY: &str = "nixBlti.delay";
 const NIX_FORCE: &str = "nixBlti.force";
 const NIX_OR_DEFAULT: &str = "nixBlti.orDefault";
@@ -162,18 +163,43 @@ impl Context<'_> {
 
             Pt::BinOp(bo) => {
                 if let Some(op) = bo.operator() {
-                    apush!(&format!("{}.nixop__{:?}", NIX_BUILTINS_RT, op));
+                    use BinOpKind as Bok;
+                    match op {
+                        Bok::IsSet => {
+                            apush!(&format!("new {lazy}(()=>(", lazy = NIX_LAZY));
+                            rtv!(bo.lhs(), "lhs for binop ?");
+                            apush!(").hasOwnProperty(");
+                            if let Some(x) = bo.rhs() {
+                                if let Some(y) = Ident::cast(x.clone()) {
+                                    apush!(&format!("\"{}\"", escape_str(y.as_str())));
+                                } else {
+                                    apush!(&format!("{force}(()=>", force = NIX_FORCE));
+                                    self.translate_node(x)?;
+                                    apush!(")");
+                                }
+                            } else {
+                                err!(format!(
+                                    "line {}: rhs for binop ? missing",
+                                    self.txtrng_to_lineno(txtrng),
+                                ));
+                            }
+                            apush!("))");
+                        }
+                        _ => {
+                            apush!(format!("{}.nixop__{:?}", NIX_BUILTINS_RT, op));
+                            apush!(&format!("({mklazy}(()=>", mklazy = NIX_MKLAZY));
+                            rtv!(bo.lhs(), "lhs for binop");
+                            apush!(&format!("),{mklazy}(()=>", mklazy = NIX_MKLAZY));
+                            rtv!(bo.rhs(), "lhs for binop");
+                            apush!("))");
+                        }
+                    }
                 } else {
                     err!(format!(
                         "line {}: operator for binop missing",
                         self.txtrng_to_lineno(txtrng),
                     ));
                 }
-                apush!("((");
-                rtv!(bo.lhs(), "lhs for binop");
-                apush!("),(");
-                rtv!(bo.rhs(), "lhs for binop");
-                apush!("))");
             }
 
             Pt::Dynamic(d) => {
@@ -375,19 +401,19 @@ impl Context<'_> {
             }
 
             Pt::OrDefault(od) => {
-                apush!(NIX_OR_DEFAULT);
-                apush!("(new ");
-                apush!(NIX_LAZY);
-                apush!("(()=>");
-                apush!(NIX_FORCE);
-                apush!("(");
+                apush!(&format!(
+                    "{ordfl}({mklazy}(()=>(",
+                    ordfl = NIX_OR_DEFAULT,
+                    mklazy = NIX_MKLAZY,
+                ));
                 rtv!(
                     od.index().map(|i| i.node().clone()),
                     "or-default without indexing operation"
                 );
-                apush!(")),");
-                apush!(NIX_DELAY);
-                apush!("(");
+                apush!(&format!(
+                    ")),{delay}(",
+                    delay = NIX_DELAY,
+                ));
                 rtv!(od.default(), "or-default without default");
                 apush!("))");
             }
