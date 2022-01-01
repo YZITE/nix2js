@@ -38,7 +38,7 @@ struct Context<'a> {
 }
 
 fn escape_str(s: &str) -> String {
-    s.replace("\\", "\\\\").replace("\"", "\\\"")
+    serde_json::value::Value::String(s.to_string()).to_string()
 }
 
 impl Context<'_> {
@@ -70,7 +70,7 @@ impl Context<'_> {
                 Some((_, x)) => match x {
                     Sv::LambdaArg => format!("{}{}", NIX_LAMBDA_ARG_PFX, vn),
                 },
-                None => format!("{}(\"{}\")", NIX_IN_SCOPE, escape_str(vn)),
+                None => format!("{}({})", NIX_IN_SCOPE, escape_str(vn)),
             },
         }
     }
@@ -173,7 +173,7 @@ impl Context<'_> {
                             apush!(").hasOwnProperty(");
                             if let Some(x) = bo.rhs() {
                                 if let Some(y) = Ident::cast(x.clone()) {
-                                    apush!(&format!("\"{}\"", escape_str(y.as_str())));
+                                    apush!(&escape_str(y.as_str()));
                                 } else {
                                     apush!(&format!("{force}(()=>", force = NIX_FORCE));
                                     self.translate_node(x)?;
@@ -247,22 +247,22 @@ impl Context<'_> {
                     for id in inh.idents() {
                         let idesc = escape_str(id.as_str());
                         apush!(NIX_IN_SCOPE);
-                        apush!("(\"");
+                        apush!("(");
                         apush!(&idesc);
-                        apush!("\",new ");
+                        apush!(",new ");
                         apush!(NIX_LAZY);
-                        apush!("(()=>nixInhR[\"");
+                        apush!("(()=>nixInhR[");
                         apush!(&idesc);
-                        apush!("\"];));");
+                        apush!("];));");
                     }
                     apush!("})()");
                 } else {
                     for id in inh.idents() {
                         let idas = id.as_str();
                         apush!(NIX_IN_SCOPE);
-                        apush!("(\"");
+                        apush!("(");
                         apush!(&escape_str(idas));
-                        apush!("\",");
+                        apush!(",");
                         apush!(&self.translate_ident(&id));
                         apush!(");");
                     }
@@ -459,7 +459,32 @@ impl Context<'_> {
                 apush!(")");
             }
 
-            Pt::Value(_) => unimplemented!(),
+            Pt::Value(v) => {
+                match v.to_value() {
+                    Ok(x) => {
+                        use rnix::value::Value as NixVal;
+                        use serde_json::value::{Number as JsNum, Value as JsVal};
+                        let jsv = match x {
+                            NixVal::Float(flt) => JsVal::Number(JsNum::from_f64(flt).expect("unrepr-able float")),
+                            NixVal::Integer(int) => JsVal::Number(int.into()),
+                            NixVal::String(s) => JsVal::String(s),
+                            NixVal::Path(anch, path) => {
+                                serde_json::json!({
+                                    "type": "path",
+                                    "anchor": format!("{:?}", anch),
+                                    "path": path,
+                                })
+                            }
+                        };
+                        apush!(&jsv.to_string());
+                    },
+                    Err(e) => err!(format!(
+                        "line {}: value deserialization error: {}",
+                        self.txtrng_to_lineno(txtrng),
+                        e
+                    )),
+                }
+            },
 
             Pt::With(_) => unimplemented!(),
         }
