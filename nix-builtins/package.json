@@ -4,7 +4,7 @@
   "description": "nix2js builtin functions",
   "main": "index.min.js",
   "type": "module",
-  "files": ["index.min.js.map"],
+  "files": ["index.js", "index.min.js.map"],
   "scripts": {
     "prepare": "uglifyjs index.js -o index.min.js --v8 --source-map -c -m",
     "test": "mocha index.test.js --require esm"
