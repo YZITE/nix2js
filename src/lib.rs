@@ -152,20 +152,6 @@ impl Context<'_> {
                 apush!("); })()");
             }
 
-            Pt::Key(key) => {
-                let mut fi = true;
-                apush!("[");
-                for i in key.path() {
-                    if fi {
-                        fi = false;
-                    } else {
-                        apush!(",");
-                    }
-                    self.translate_node(i)?;
-                }
-                apush!("]");
-            }
-
             Pt::Dynamic(d) => {
                 // dynamic key component
                 apush!(NIX_FORCE);
@@ -191,27 +177,6 @@ impl Context<'_> {
                 apush!("; } else { nixRet = ");
                 rtv!(ie.else_body(), "else-body for if-else");
                 apush!("; }})");
-            }
-
-            Pt::Select(sel) => {
-                apush!("(");
-                rtv!(sel.set(), "set for select");
-                apush!(")[");
-                if let Some(idx) = sel.index() {
-                    if let Some(val) = Ident::cast(idx.clone()) {
-                        apush!("\"");
-                        apush!(val.as_str());
-                        apush!("\"");
-                    } else {
-                        self.translate_node(idx)?;
-                    }
-                } else {
-                    return Err(vec![format!(
-                        "{:?}: {} missing",
-                        txtrng, "index for selectr"
-                    )]);
-                }
-                apush!("]");
             }
 
             Pt::Inherit(inh) => {
@@ -253,6 +218,20 @@ impl Context<'_> {
             }
 
             Pt::InheritFrom(inhf) => rtv!(inhf.inner(), "inner for inherit-from"),
+
+            Pt::Key(key) => {
+                let mut fi = true;
+                apush!("[");
+                for i in key.path() {
+                    if fi {
+                        fi = false;
+                    } else {
+                        apush!(",");
+                    }
+                    self.translate_node(i)?;
+                }
+                apush!("]");
+            }
 
             Pt::Lambda(lam) => {
                 if let Some(x) = lam.arg() {
@@ -394,6 +373,27 @@ impl Context<'_> {
 
             Pt::Paren(p) => rtv!(p.inner(), "inner for paren"),
             Pt::Root(r) => rtv!(r.inner(), "inner for root"),
+
+            Pt::Select(sel) => {
+                apush!("(");
+                rtv!(sel.set(), "set for select");
+                apush!(")[");
+                if let Some(idx) = sel.index() {
+                    if let Some(val) = Ident::cast(idx.clone()) {
+                        apush!("\"");
+                        apush!(val.as_str());
+                        apush!("\"");
+                    } else {
+                        self.translate_node(idx)?;
+                    }
+                } else {
+                    return Err(vec![format!(
+                        "{:?}: {} missing",
+                        txtrng, "index for selectr"
+                    )]);
+                }
+                apush!("]");
+            }
 
             _ => unimplemented!(),
         }
