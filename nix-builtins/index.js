@@ -170,12 +170,16 @@ export function initRtDep(nixRt) {
                 req_type("||", a, "boolean");
                 return a || b;
             }),
-            nixop__Equal: binop_helper("==", function(a, b) {
-                return isEqual(a, b);
-            }),
-            nixop__NotEqual: binop_helper("!=", function(a, b) {
-                return !isEqual(a, b);
-            }),
+            nixop__Equal: function(a, c) {
+                let b = force(a);
+                let d = force(c);
+                return isEqual(b, d);
+            },
+            nixop__NotEqual: function(a, c) {
+                let b = force(a);
+                let d = force(c);
+                return !isEqual(b, d);
+            },
             nixop__Less: binop_helper("<", function(a, b) {
                 req_type("<", a, "number");
                 return a < b;
