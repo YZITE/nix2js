@@ -186,7 +186,7 @@ impl Context<'_> {
                             apush!("))");
                         }
                         _ => {
-                            apush!(format!("{}.nixop__{:?}", NIX_BUILTINS_RT, op));
+                            apush!(&format!("{}.nixop__{:?}", NIX_BUILTINS_RT, op));
                             apush!(&format!("({mklazy}(()=>", mklazy = NIX_MKLAZY));
                             rtv!(bo.lhs(), "lhs for binop");
                             apush!(&format!("),{mklazy}(()=>", mklazy = NIX_MKLAZY));
