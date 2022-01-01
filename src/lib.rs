@@ -18,19 +18,23 @@ use std::collections::HashMap;
 
 const NIX_BUILTINS_RT: &str = "nixBltiRT";
 const NIX_LAZY: &str = "nixBlti.Lazy";
+const NIX_DELAY: &str = "nixBlti.delay";
 const NIX_FORCE: &str = "nixBlti.force";
+const NIX_OR_DEFAULT: &str = "nixBlti.orDefault";
 const NIXBLT_IN_SCOPE: &str = "nixBlti.inScope";
 const NIX_RUNTIME: &str = "nixRt";
 const NIX_IN_SCOPE: &str = "nixInScope";
 const NIX_LAMBDA_ARG_PFX: &str = "nix__";
+const NIX_LAMBDA_BOUND: &str = "nixBound";
 
 enum ScopedVar {
     LambdaArg,
 }
 
 struct Context<'a> {
+    inp: &'a str,
     acc: &'a mut String,
-    vars: HashMap<String, ScopedVar>,
+    vars: Vec<(String, ScopedVar)>,
 }
 
 fn escape_str(s: &str) -> String {
@@ -38,14 +42,40 @@ fn escape_str(s: &str) -> String {
 }
 
 impl Context<'_> {
-    fn translate_varname(&self, vn: &str) -> String {
+    fn txtrng_to_lineno(&self, txtrng: rnix::TextRange) -> usize {
+        let bytepos: usize = txtrng.start().into();
+        inp.char_indices()
+            .take_while(|(idx, _)| idx <= bytepos)
+            .filter(|(_, c)| c == '\n')
+            .count()
+    }
+
+    fn translate_varname(&self, vn: &str, txtrng: rnix::TextRange) -> String {
         use ScopedVar as Sv;
-        match self.vars.get(vn) {
-            Some(x) => match x {
-                Sv::LambdaArg => format!("{}{}", NIX_LAMBDA_ARG_PFX, vn),
+        match vn {
+            "builtins" => {
+                // keep the builtins informed about the line number
+                format!("({}({}))", NIX_BUILTINS_RT, txtrng_to_lineno(txtrng))
+            }
+            "derivation" => {
+                // aliased name for derivation builtin
+                format!(
+                    "({}({}).derivation)",
+                    NIX_BUILTINS_RT,
+                    txtrng_to_lineno(txtrng)
+                )
+            }
+            _ => match self.vars.iter().rev().find(|(ref i, _)| vn == i) {
+                Some((_, x)) => match x {
+                    Sv::LambdaArg => format!("{}{}", NIX_LAMBDA_ARG_PFX, vn),
+                },
+                None => format!("({}(\"{}\"))", NIX_IN_SCOPE, escape_str(vn)),
             },
-            None => format!("({}(\"{}\"))", NIX_IN_SCOPE, escape_str(vn)),
         }
+    }
+
+    fn translate_ident(&self, id: &Ident) -> String {
+        self.translate_varname(id.as_str(), id.node().text_range())
     }
 
     fn use_or(&mut self, x: Option<NixNode>, alt: &str) -> Result<(), Vec<String>> {
@@ -56,6 +86,10 @@ impl Context<'_> {
             }
             Some(x) => self.translate_node(x),
         }
+    }
+
+    fn translate_let(&mut self, node: &dyn EntryHolder, body: NixNode) -> Result<(), Vec<String>> {
+        unimplemented!()
     }
 
     fn translate_node(&mut self, node: NixNode) -> Result<(), Vec<String>> {
@@ -133,7 +167,7 @@ impl Context<'_> {
             // should be catched by `parsed.errors()...` in `translate(_)`
             Pt::Error(_) => unreachable!(),
 
-            Pt::Ident(id) => apush!(&self.translate_varname(id.as_str())),
+            Pt::Ident(id) => apush!(&self.translate_ident(&id)),
 
             Pt::IfElse(ie) => {
                 apush!("(new ");
@@ -202,14 +236,140 @@ impl Context<'_> {
                         apush!("(\"");
                         apush!(&escape_str(idas));
                         apush!("\",");
-                        apush!(&self.translate_varname(idas));
+                        apush!(&self.translate_ident(&id));
                         apush!(");");
                     }
                 }
             }
 
-            // to be continued...
-            _ => unimplemented!(),
+            Pt::InheritFrom(inhf) => rtv!(inhf.inner(), "inner for inherit-from"),
+
+            Pt::Lambda(lam) => {
+                if let Some(x) = lam.arg() {
+                    // FIXME: use guard to truncate vars
+                    let cur_lamstk = self.vars.len();
+                    apush!("(function(");
+                    if let Some(y) = Ident::cast(x) {
+                        let yas = y.as_str();
+                        self.vars.push((yas.to_string(), ScopedVar::LambdaArg));
+                        apush!(&self.translate_ident(&y));
+                        apush!("){");
+                        // } -- this fixes brace association
+                    } else if let Some(y) = Pattern::cast(x) {
+                        let argname = if let Some(z) = y.at() {
+                            self.vars
+                                .push((z.as_str().to_string(), ScopedVar::LambdaArg));
+                            self.translate_ident(&z)
+                        } else {
+                            NIX_LAMBDA_BOUND.to_string()
+                        };
+                        apush!(format!(
+                            "{arg}){{let {arg}={}({arg});",
+                            NIX_FORCE,
+                            arg = argname
+                        ));
+                        // } -- this fixes brace association
+                        for i in y.entries() {
+                            if let Some(z) = i.name() {
+                                self.vars
+                                    .push((z.as_str().to_string(), ScopedVar::LambdaArg));
+                                if let Some(zdfl) = i.default() {
+                                    apush!(&format!(
+                                        "let {zname}=({arg}.{zas} !== undefined)?({arg.}{zas}):(",
+                                        arg = argname,
+                                        zas = z.as_str(),
+                                        zname = self.translate_ident(&z)
+                                    ));
+                                    self.translate_node(zdfl);
+                                    apush!(");");
+                                } else {
+                                    // TODO: adjust error message to what Nix currently issues.
+                                    apush!(&format!(
+                                        "let {zname}={arg}.{zas};if({zname}===undefined){{{rt}.error(\"attrset element {zas} missing at lambda call\",{lno});}} ",
+                                        arg = argname,
+                                        zas = z.as_str(),
+                                        zname = self.translate_ident(&z),
+                                        rt = NIX_RUNTIME,
+                                        lno = self.txtrng_to_lineno(z.node().text_range())
+                                    ));
+                                }
+                            } else {
+                                return Err(vec![format!(
+                                    "lambda pattern ({:?}) has entry without name",
+                                    y
+                                )]);
+                            }
+                        }
+                    } else {
+                        return Err(vec![format!("lambda ({:?}) with invalid argument", lam)]);
+                    }
+
+                    rtv!(lam.body(), "body for lambda");
+                    assert!(self.vars.len() >= cur_lamstk);
+                    self.vars.truncate(cur_lamstk);
+                    apush!("})");
+                } else {
+                    return Err(vec![format!("lambda ({:?}) with missing argument", lam)]);
+                }
+            }
+
+            Pt::LegacyLet(l) => self.translate_let(
+                &l,
+                l.entries().find(|i| {
+                    {
+                        let kp = i.key().path().collect();
+                        if let [name] = &kp[..] {
+                            if let Some(name) = Ident::cast(name) {
+                                if name == "body" {
+                                    return true;
+                                }
+                            }
+                        }
+                        false
+                    }
+                    .ok_or_else(|| vec!["legacy let { ... } without body assignment".to_string()])
+                }),
+            )?,
+
+            Pt::LetIn(l) => self.translate_let(&l, l.body())?,
+
+            Pt::List(l) => {
+                apush!("[");
+                let mut fi = true;
+                for i in l.items() {
+                    if fi {
+                        fi = false;
+                    } else {
+                        apush!(",");
+                    }
+                    self.translate_node(i)?;
+                }
+                apush!("]");
+            }
+
+            Pt::OrDefault(od) => {
+                apush!("(");
+                apush!(NIX_OR_DEFAULT);
+                apush!("(new ");
+                apush!(NIX_LAZY);
+                apush!("(()=>");
+                apush!(NIX_FORCE);
+                apush!("(");
+                rtv!(
+                    od.index().map(|i| i.node()),
+                    "or-default without indexing operation"
+                );
+                apush!(")),");
+                apush!(NIX_DELAY);
+                apush!("(");
+                rtv!(od.default(), "or-default without default");
+                apush!(")))");
+            }
+
+            Pt::Paren(p) => rtv!(p.inner(), "inner for paren"),
+            Pt::Root(r) => rtv!(r.inner(), "inner for root"),
+
+            _ => unimplemented(),
         }
 
         Ok(())
@@ -234,6 +394,7 @@ pub fn translate(s: &str) -> Result<String, Vec<String>> {
     ret += NIX_IN_SCOPE;
     ret += " = function(key, value) { console.error(\"illegal nixInScope call with key=\", key, \" value=\", value); };\n";
     Context {
+        inp: s,
         acc: &mut ret,
         vars: Default::default(),
     }

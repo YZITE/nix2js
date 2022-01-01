@@ -21,11 +21,19 @@ export class Lazy {
 }
 
 export function force(value) {
-    let value2 = value;
     if (value instanceof Lazy) {
-        value2 = value.evaluate();
+        return value.evaluate();
+    } else {
+        return value;
     }
-    return value2;
+}
+
+export function delay(value) {
+    if (!(value instanceof Lazy)) {
+        return Lazy(()=>value);
+    } else {
+        return value;
+    }
 }
 
 export function inScope(orig, overlay) {
@@ -43,28 +51,48 @@ export function inScope(orig, overlay) {
     }
 }
 
-export function initRtDep(nixRt) {
-    return {
-        add: function(lineNo, a) {
-            return function(c) {
-                let b = force(a);
-                let d = force(c);
-                let tb = typeof b;
-                let td = typeof d;
-                if (tb === td) {
-                    return b + d;
-                } else {
-                    nixRt.error("builtins.add: given types mismatch (" + tb + " != " + td + ")", lineNo);
-                }
-            };
-        },
-        assert: function(lineNo, cond) {
-            let cond2 = force(cond);
-            if (typeof cond2 !== "boolean") {
-                nixRt.error("assertion condition has wrong type " + typeof cond2, lineNo);
-            } else if (!cond2) {
-                nixRt.error("assertion failed", lineNo);
-            }
+export function orDefault(lazy_selop, lazy_dfl) {
+    let ret;
+    try {
+        ret = lazy_selop.evaluate();
+    } catch (e) {
+        if (e instanceof TypeError) {
+            console.debug("nix-blti.orDefault: encountered+catched TypeError:", e);
+            return lazy_dfl.evaluate();
+        } else {
+            throw e;
         }
+    }
+    if (ret === undefined) {
+        ret = lazy_dfl.evaluate();
+    }
+    return ret;
+}
+
+export function initRtDep(nixRt) {
+    return function(lineNo) {
+        return {
+            add: function(a) {
+                return function(c) {
+                    let b = force(a);
+                    let d = force(c);
+                    let tb = typeof b;
+                    let td = typeof d;
+                    if (tb === td) {
+                        return b + d;
+                    } else {
+                        nixRt.error("builtins.add: given types mismatch (" + tb + " != " + td + ")", lineNo);
+                    }
+                };
+            },
+            assert: function(lineNo, cond) {
+                let cond2 = force(cond);
+                if (typeof cond2 !== "boolean") {
+                    nixRt.error("assertion condition has wrong type " + typeof cond2, lineNo);
+                } else if (!cond2) {
+                    nixRt.error("assertion failed", lineNo);
+                }
+            }
+        };
     };
 }

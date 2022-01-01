@@ -64,16 +64,16 @@ describe('force', function() {
 describe('add', function() {
     it('should work if arguments are correct', function() {
         let blti = instrum_blti;
-        assert(blti.add(-1, 1200)(567) === 1767, "integer");
-        assert(blti.add(-2, -100)(567) === 467, "integer (2)");
-        assert(blti.add(-3, 203)(-500) === -297, "integer (3)");
-        assert(blti.add(-4, "ab")("cde") === "abcde", "string");
+        assert(blti(-1).add(1200)(567) === 1767, "integer");
+        assert(blti(-2).add(-100)(567) === 467, "integer (2)");
+        assert(blti(-3).add(203)(-500) === -297, "integer (3)");
+        assert(blti(-4).add("ab")("cde") === "abcde", "string");
     });
     describe('should report errors correctly', function() {
         it("int/string", function() {
             let blti = instrum_blti;
             try {
-                console.log(blti.add(-500, 0)("oops"));
+                console.log(blti(-500).add(0)("oops"));
                 assert(false, "unreachable");
             } catch(e) {
                 assert(e.message === "builtins.add: given types mismatch (number != string)", "message");
@@ -83,7 +83,7 @@ describe('add', function() {
         it("string/int", function() {
             let blti = instrum_blti;
             try {
-                console.log(blti.add(275, "oops")(0));
+                console.log(blti(275).add("oops")(0));
                 assert(false, "unreachable");
             } catch(e) {
                 assert(e.message === "builtins.add: given types mismatch (string != number)", "message");
