@@ -41,6 +41,27 @@ fn escape_str(s: &str) -> String {
     serde_json::value::Value::String(s.to_string()).to_string()
 }
 
+macro_rules! err {
+    ($x:expr) => {{
+        return Err(vec![$x]);
+    }};
+}
+
+macro_rules! rtv {
+    ($x:expr, $desc:expr) => {{
+        match $x {
+            None => {
+                err!(format!(
+                    "line {}: {} missing",
+                    self.txtrng_to_lineno(txtrng),
+                    $desc
+                ));
+            }
+            Some(x) => self.translate_node(x)?,
+        }
+    }};
+}
+
 impl Context<'_> {
     fn push(&mut self, x: &str) {
         *self.acc += x;
@@ -106,12 +127,6 @@ impl Context<'_> {
             return Ok(());
         }
 
-        macro_rules! err {
-            ($x:expr) => {{
-                return Err(vec![$x]);
-            }};
-        }
-
         let txtrng = node.text_range();
         let x = match ParsedType::try_from(node) {
             Err(e) => {
@@ -125,21 +140,6 @@ impl Context<'_> {
             Ok(x) => x,
         };
         use ParsedType as Pt;
-
-        macro_rules! rtv {
-            ($x:expr, $desc:expr) => {{
-                match $x {
-                    None => {
-                        err!(format!(
-                            "line {}: {} missing",
-                            self.txtrng_to_lineno(txtrng),
-                            $desc
-                        ));
-                    }
-                    Some(x) => self.translate_node(x)?,
-                }
-            }};
-        }
 
         match x {
             Pt::Apply(app) => {
