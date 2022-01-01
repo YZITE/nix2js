@@ -42,6 +42,10 @@ fn escape_str(s: &str) -> String {
 }
 
 impl Context<'_> {
+    fn push(&mut self, x: &str) {
+        *self.acc += x;
+    }
+
     fn txtrng_to_lineno(&self, txtrng: rnix::TextRange) -> usize {
         let bytepos: usize = txtrng.start().into();
         self.inp
@@ -122,11 +126,6 @@ impl Context<'_> {
         };
         use ParsedType as Pt;
 
-        macro_rules! apush {
-            ($x:expr) => {{
-                *self.acc += $x;
-            }};
-        }
         macro_rules! rtv {
             ($x:expr, $desc:expr) => {{
                 match $x {
@@ -144,21 +143,21 @@ impl Context<'_> {
 
         match x {
             Pt::Apply(app) => {
-                apush!("(");
+                self.push("(");
                 rtv!(app.lambda(), "lambda for application");
-                apush!(")(");
+                self.push(")(");
                 rtv!(app.value(), "value for application");
-                apush!(")");
+                self.push(")");
             }
 
             Pt::Assert(art) => {
-                apush!("(function() { ");
-                apush!(NIX_BUILTINS_RT);
-                apush!(".assert(");
+                self.push("(function() { ");
+                self.push(NIX_BUILTINS_RT);
+                self.push(".assert(");
                 rtv!(art.condition(), "condition for assert");
-                apush!("); return (");
+                self.push("); return (");
                 rtv!(art.body(), "body for assert");
-                apush!("); })()");
+                self.push("); })()");
             }
 
             Pt::AttrSet(_) => unimplemented!(),
@@ -168,16 +167,16 @@ impl Context<'_> {
                     use BinOpKind as Bok;
                     match op {
                         Bok::IsSet => {
-                            apush!(&format!("new {lazy}(()=>(", lazy = NIX_LAZY));
+                            self.push(&format!("new {lazy}(()=>(", lazy = NIX_LAZY));
                             rtv!(bo.lhs(), "lhs for binop ?");
-                            apush!(").hasOwnProperty(");
+                            self.push(").hasOwnProperty(");
                             if let Some(x) = bo.rhs() {
                                 if let Some(y) = Ident::cast(x.clone()) {
-                                    apush!(&escape_str(y.as_str()));
+                                    self.push(&escape_str(y.as_str()));
                                 } else {
-                                    apush!(&format!("{force}(()=>", force = NIX_FORCE));
+                                    self.push(&format!("{force}(()=>", force = NIX_FORCE));
                                     self.translate_node(x)?;
-                                    apush!(")");
+                                    self.push(")");
                                 }
                             } else {
                                 err!(format!(
@@ -185,15 +184,15 @@ impl Context<'_> {
                                     self.txtrng_to_lineno(txtrng),
                                 ));
                             }
-                            apush!("))");
+                            self.push("))");
                         }
                         _ => {
-                            apush!(&format!("{}.nixop__{:?}", NIX_BUILTINS_RT, op));
-                            apush!(&format!("({mklazy}(()=>", mklazy = NIX_MKLAZY));
+                            self.push(&format!("{}.nixop__{:?}", NIX_BUILTINS_RT, op));
+                            self.push(&format!("({mklazy}(()=>", mklazy = NIX_MKLAZY));
                             rtv!(bo.lhs(), "lhs for binop");
-                            apush!(&format!("),{mklazy}(()=>", mklazy = NIX_MKLAZY));
+                            self.push(&format!("),{mklazy}(()=>", mklazy = NIX_MKLAZY));
                             rtv!(bo.rhs(), "lhs for binop");
-                            apush!("))");
+                            self.push("))");
                         }
                     }
                 } else {
@@ -206,65 +205,65 @@ impl Context<'_> {
 
             Pt::Dynamic(d) => {
                 // dynamic key component
-                apush!(NIX_FORCE);
-                apush!("(");
+                self.push(NIX_FORCE);
+                self.push("(");
                 rtv!(d.inner(), "inner for dynamic (key)");
-                apush!(")");
+                self.push(")");
             }
 
             // should be catched by `parsed.errors()...` in `translate(_)`
             Pt::Error(_) => unreachable!(),
 
-            Pt::Ident(id) => apush!(&self.translate_ident(&id)),
+            Pt::Ident(id) => self.push(&self.translate_ident(&id)),
 
             Pt::IfElse(ie) => {
-                apush!("new ");
-                apush!(NIX_LAZY);
-                apush!("(function() { let nixRet = undefined; if(");
-                apush!(NIX_FORCE);
-                apush!("(");
+                self.push("new ");
+                self.push(NIX_LAZY);
+                self.push("(function() { let nixRet = undefined; if(");
+                self.push(NIX_FORCE);
+                self.push("(");
                 rtv!(ie.condition(), "condition for if-else");
-                apush!(")) { nixRet = ");
+                self.push(")) { nixRet = ");
                 rtv!(ie.body(), "if-body for if-else");
-                apush!("; } else { nixRet = ");
+                self.push("; } else { nixRet = ");
                 rtv!(ie.else_body(), "else-body for if-else");
-                apush!("; }})");
+                self.push("; }})");
             }
 
             Pt::Inherit(inh) => {
                 // TODO: the following stuff belongs in the handling of
                 // rec attrsets and let bindings
-                //apush!("((function(){");
-                //apush!("let nixInScope = inScope(nixInScope, undefined);");
+                //self.push("((function(){");
+                //self.push("let nixInScope = inScope(nixInScope, undefined);");
                 // idk how to handle self-references....
                 //unimplemented!();
-                //apush!("})())");
+                //self.push("})())");
 
                 if let Some(inhf) = inh.from() {
-                    apush!("(function(){ let nixInhR = ");
+                    self.push("(function(){ let nixInhR = ");
                     rtv!(inhf.inner(), "inner for inherit-from");
-                    apush!(";");
+                    self.push(";");
                     for id in inh.idents() {
                         let idesc = escape_str(id.as_str());
-                        apush!(NIX_IN_SCOPE);
-                        apush!("(");
-                        apush!(&idesc);
-                        apush!(",new ");
-                        apush!(NIX_LAZY);
-                        apush!("(()=>nixInhR[");
-                        apush!(&idesc);
-                        apush!("];));");
+                        self.push(NIX_IN_SCOPE);
+                        self.push("(");
+                        self.push(&idesc);
+                        self.push(",new ");
+                        self.push(NIX_LAZY);
+                        self.push("(()=>nixInhR[");
+                        self.push(&idesc);
+                        self.push("];));");
                     }
-                    apush!("})()");
+                    self.push("})()");
                 } else {
                     for id in inh.idents() {
                         let idas = id.as_str();
-                        apush!(NIX_IN_SCOPE);
-                        apush!("(");
-                        apush!(&escape_str(idas));
-                        apush!(",");
-                        apush!(&self.translate_ident(&id));
-                        apush!(");");
+                        self.push(NIX_IN_SCOPE);
+                        self.push("(");
+                        self.push(&escape_str(idas));
+                        self.push(",");
+                        self.push(&self.translate_ident(&id));
+                        self.push(");");
                     }
                 }
             }
@@ -273,16 +272,16 @@ impl Context<'_> {
 
             Pt::Key(key) => {
                 let mut fi = true;
-                apush!("[");
+                self.push("[");
                 for i in key.path() {
                     if fi {
                         fi = false;
                     } else {
-                        apush!(",");
+                        self.push(",");
                     }
                     self.translate_node(i)?;
                 }
-                apush!("]");
+                self.push("]");
             }
 
             Pt::KeyValue(kv) => unreachable!("standalone key-value not supported: {:?}", kv),
@@ -291,12 +290,12 @@ impl Context<'_> {
                 if let Some(x) = lam.arg() {
                     // FIXME: use guard to truncate vars
                     let cur_lamstk = self.vars.len();
-                    apush!("(function(");
+                    self.push("(function(");
                     if let Some(y) = Ident::cast(x.clone()) {
                         let yas = y.as_str();
                         self.vars.push((yas.to_string(), ScopedVar::LambdaArg));
-                        apush!(&self.translate_ident(&y));
-                        apush!("){");
+                        self.push(&self.translate_ident(&y));
+                        self.push("){");
                         // } -- this fixes brace association
                     } else if let Some(y) = Pattern::cast(x) {
                         let argname = if let Some(z) = y.at() {
@@ -306,7 +305,7 @@ impl Context<'_> {
                         } else {
                             NIX_LAMBDA_BOUND.to_string()
                         };
-                        apush!(&format!(
+                        self.push(&format!(
                             "{arg}){{let {arg}={}({arg});",
                             NIX_FORCE,
                             arg = argname
@@ -317,17 +316,17 @@ impl Context<'_> {
                                 self.vars
                                     .push((z.as_str().to_string(), ScopedVar::LambdaArg));
                                 if let Some(zdfl) = i.default() {
-                                    apush!(&format!(
+                                    self.push(&format!(
                                         "let {zname}=({arg}.{zas} !== undefined)?({arg}.{zas}):(",
                                         arg = argname,
                                         zas = z.as_str(),
                                         zname = self.translate_ident(&z)
                                     ));
                                     self.translate_node(zdfl)?;
-                                    apush!(");");
+                                    self.push(");");
                                 } else {
                                     // TODO: adjust error message to what Nix currently issues.
-                                    apush!(&format!(
+                                    self.push(&format!(
                                         "let {zname}={arg}.{zas};if({zname}===undefined){{{rt}.error(\"attrset element {zas} missing at lambda call\",{lno});}} ",
                                         arg = argname,
                                         zas = z.as_str(),
@@ -347,7 +346,7 @@ impl Context<'_> {
                     rtv!(lam.body(), "body for lambda");
                     assert!(self.vars.len() >= cur_lamstk);
                     self.vars.truncate(cur_lamstk);
-                    apush!("})");
+                    self.push("})");
                 } else {
                     err!(format!("lambda ({:?}) with missing argument", lam));
                 }
@@ -391,21 +390,21 @@ impl Context<'_> {
             )?,
 
             Pt::List(l) => {
-                apush!("[");
+                self.push("[");
                 let mut fi = true;
                 for i in l.items() {
                     if fi {
                         fi = false;
                     } else {
-                        apush!(",");
+                        self.push(",");
                     }
                     self.translate_node(i)?;
                 }
-                apush!("]");
+                self.push("]");
             }
 
             Pt::OrDefault(od) => {
-                apush!(&format!(
+                self.push(&format!(
                     "{ordfl}({mklazy}(()=>(",
                     ordfl = NIX_OR_DEFAULT,
                     mklazy = NIX_MKLAZY,
@@ -414,9 +413,9 @@ impl Context<'_> {
                     od.index().map(|i| i.node().clone()),
                     "or-default without indexing operation"
                 );
-                apush!(&format!(")),{delay}(", delay = NIX_DELAY));
+                self.push(&format!(")),{delay}(", delay = NIX_DELAY));
                 rtv!(od.default(), "or-default without default");
-                apush!("))");
+                self.push("))");
             }
 
             Pt::Paren(p) => rtv!(p.inner(), "inner for paren"),
@@ -430,21 +429,21 @@ impl Context<'_> {
             Pt::Root(r) => rtv!(r.inner(), "inner for root"),
 
             Pt::Select(sel) => {
-                apush!("(");
+                self.push("(");
                 rtv!(sel.set(), "set for select");
-                apush!(")[");
+                self.push(")[");
                 if let Some(idx) = sel.index() {
                     if let Some(val) = Ident::cast(idx.clone()) {
-                        apush!("\"");
-                        apush!(val.as_str());
-                        apush!("\"");
+                        self.push("\"");
+                        self.push(val.as_str());
+                        self.push("\"");
                     } else {
                         self.translate_node(idx)?;
                     }
                 } else {
                     err!(format!("{:?}: {} missing", txtrng, "index for selectr"));
                 }
-                apush!("]");
+                self.push("]");
             }
 
             Pt::Str(s) => unreachable!("standalone string not supported: {:?}", s),
@@ -454,36 +453,36 @@ impl Context<'_> {
                 match uo.operator() {
                     Uok::Invert | Uok::Negate => {}
                 }
-                apush!(&format!("{}.nixuop__{:?}(", NIX_BUILTINS_RT, uo.operator()));
+                self.push(&format!("{}.nixuop__{:?}(", NIX_BUILTINS_RT, uo.operator()));
                 rtv!(uo.value(), "value for unary-op");
-                apush!(")");
+                self.push(")");
             }
 
-            Pt::Value(v) => {
-                match v.to_value() {
-                    Ok(x) => {
-                        use rnix::value::Value as NixVal;
-                        use serde_json::value::{Number as JsNum, Value as JsVal};
-                        let jsv = match x {
-                            NixVal::Float(flt) => JsVal::Number(JsNum::from_f64(flt).expect("unrepr-able float")),
-                            NixVal::Integer(int) => JsVal::Number(int.into()),
-                            NixVal::String(s) => JsVal::String(s),
-                            NixVal::Path(anch, path) => {
-                                serde_json::json!({
-                                    "type": "path",
-                                    "anchor": format!("{:?}", anch),
-                                    "path": path,
-                                })
-                            }
-                        };
-                        apush!(&jsv.to_string());
-                    },
-                    Err(e) => err!(format!(
-                        "line {}: value deserialization error: {}",
-                        self.txtrng_to_lineno(txtrng),
-                        e
-                    )),
+            Pt::Value(v) => match v.to_value() {
+                Ok(x) => {
+                    use rnix::value::Value as NixVal;
+                    use serde_json::value::{Number as JsNum, Value as JsVal};
+                    let jsv = match x {
+                        NixVal::Float(flt) => {
+                            JsVal::Number(JsNum::from_f64(flt).expect("unrepr-able float"))
+                        }
+                        NixVal::Integer(int) => JsVal::Number(int.into()),
+                        NixVal::String(s) => JsVal::String(s),
+                        NixVal::Path(anch, path) => {
+                            serde_json::json!({
+                                "type": "path",
+                                "anchor": format!("{:?}", anch),
+                                "path": path,
+                            })
+                        }
+                    };
+                    self.push(&jsv.to_string());
                 }
+                Err(e) => err!(format!(
+                    "line {}: value deserialization error: {}",
+                    self.txtrng_to_lineno(txtrng),
+                    e
+                )),
             },
 
             Pt::With(_) => unimplemented!(),
