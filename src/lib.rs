@@ -161,19 +161,17 @@ impl Context<'_> {
             }
 
             Pt::BinOp(bo) => {
-                // we need extra parens to get the operator precedence right
-                apush!("((");
-                rtv!(bo.lhs(), "lhs for binop");
-                apush!(")");
                 if let Some(op) = bo.operator() {
-                    unimplemented!();
+                    apush!(&format!("{}.nixop__{:?}", NIX_BUILTINS_RT, op));
                 } else {
                     err!(format!(
                         "line {}: operator for binop missing",
                         self.txtrng_to_lineno(txtrng),
                     ));
                 }
-                apush!("(");
+                apush!("((");
+                rtv!(bo.lhs(), "lhs for binop");
+                apush!("),(");
                 rtv!(bo.rhs(), "lhs for binop");
                 apush!("))");
             }

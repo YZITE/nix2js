@@ -71,28 +71,58 @@ export function orDefault(lazy_selop, lazy_dfl) {
 
 export function initRtDep(nixRt) {
     return function(lineNo) {
-        return {
-            add: function(a) {
+        function binop_helper(name, f) {
+            return function(a) {
                 return function(c) {
                     let b = force(a);
                     let d = force(c);
                     let tb = typeof b;
                     let td = typeof d;
                     if (tb === td) {
-                        return b + d;
+                        return f(b, d);
                     } else {
-                        nixRt.error("builtins.add: given types mismatch (" + tb + " != " + td + ")", lineNo);
+                        nixRt.error("builtins." + name + ": given types mismatch (" + tb + " != " + td + ")", lineNo);
                     }
                 };
-            },
+            };
+        }
+
+        function req_number(opname, a) {
+            if (typeof a !== 'number') {
+                nixRt.error("builtins." + opname + ": invalid input type (" + typeof a + ")", lineNo);
+            }
+        }
+
+        return {
+            add: binop_helper("add", function(a, b) {
+                req_number("add", a);
+                return a + b;
+            }),
             assert: function(lineNo, cond) {
                 let cond2 = force(cond);
-                if (typeof cond2 !== "boolean") {
-                    nixRt.error("assertion condition has wrong type " + typeof cond2, lineNo);
+                if (typeof cond2 !== 'boolean') {
+                    nixRt.error("assertion condition has wrong type (" + typeof cond2 + ")", lineNo);
                 } else if (!cond2) {
                     nixRt.error("assertion failed", lineNo);
                 }
-            }
+            },
+            nixop__Concat: binop_helper("++", function(a, b) {
+                if (typeof a !== 'object') {
+                    nixRt.error("builtins.++: invalid input type (" + typeof cond2 + ")", lineNo);
+                }
+                return a.concat(b);
+            }),
+            nixop__Add: binop_helper("+", function(a, b) {
+                return a + b;
+            }),
+            nixop__Sub: binop_helper("-", function(a, b) {
+                req_number("-", a);
+                return a - b;
+            }),
+            nixop__Mul: binop_helper("*", function(a, b) {
+                req_number("*", a);
+                return a * b;
+            })
         };
     };
 }
