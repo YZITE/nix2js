@@ -101,13 +101,21 @@ impl Context<'_> {
             return Ok(());
         }
 
+        macro_rules! err {
+            ($x:expr) => {{
+                return Err(vec![$x]);
+            }};
+        }
+
         let txtrng = node.text_range();
         let x = match ParsedType::try_from(node) {
             Err(e) => {
-                return Err(vec![format!(
-                    "{:?}: unable to parse node of kind {:?}",
-                    txtrng, e.0
-                )])
+                err!(format!(
+                    "{:?} (line {}): unable to parse node of kind {:?}",
+                    txtrng,
+                    self.txtrng_to_lineno(txtrng),
+                    e.0
+                ));
             }
             Ok(x) => x,
         };
@@ -122,11 +130,11 @@ impl Context<'_> {
             ($x:expr, $desc:expr) => {{
                 match $x {
                     None => {
-                        return Err(vec![format!(
+                        err!(format!(
                             "line {}: {} missing",
                             self.txtrng_to_lineno(txtrng),
                             $desc
-                        )])
+                        ));
                     }
                     Some(x) => self.translate_node(x)?,
                 }
@@ -150,6 +158,24 @@ impl Context<'_> {
                 apush!("); return (");
                 rtv!(art.body(), "body for assert");
                 apush!("); })()");
+            }
+
+            Pt::BinOp(bo) => {
+                // we need extra parens to get the operator precedence right
+                apush!("((");
+                rtv!(bo.lhs(), "lhs for binop");
+                apush!(")");
+                if let Some(op) = bo.operator() {
+                    unimplemented!();
+                } else {
+                    err!(format!(
+                        "line {}: operator for binop missing",
+                        self.txtrng_to_lineno(txtrng),
+                    ));
+                }
+                apush!("(");
+                rtv!(bo.rhs(), "lhs for binop");
+                apush!("))");
             }
 
             Pt::Dynamic(d) => {
@@ -283,14 +309,11 @@ impl Context<'_> {
                                     ));
                                 }
                             } else {
-                                return Err(vec![format!(
-                                    "lambda pattern ({:?}) has entry without name",
-                                    y
-                                )]);
+                                err!(format!("lambda pattern ({:?}) has entry without name", y));
                             }
                         }
                     } else {
-                        return Err(vec![format!("lambda ({:?}) with invalid argument", lam)]);
+                        err!(format!("lambda ({:?}) with invalid argument", lam));
                     }
 
                     rtv!(lam.body(), "body for lambda");
@@ -298,7 +321,7 @@ impl Context<'_> {
                     self.vars.truncate(cur_lamstk);
                     apush!("})");
                 } else {
-                    return Err(vec![format!("lambda ({:?}) with missing argument", lam)]);
+                    err!(format!("lambda ({:?}) with missing argument", lam));
                 }
             }
 
@@ -387,10 +410,7 @@ impl Context<'_> {
                         self.translate_node(idx)?;
                     }
                 } else {
-                    return Err(vec![format!(
-                        "{:?}: {} missing",
-                        txtrng, "index for selectr"
-                    )]);
+                    err!(format!("{:?}: {} missing", txtrng, "index for selectr"));
                 }
                 apush!("]");
             }
