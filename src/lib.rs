@@ -1,23 +1,25 @@
 /**
-  this crate converts Nix code into javascript code, and generates code
-  which is wrapped inside a function which expects a "runtime" object,
-  which should contain the following methods:
-  - `error(message, lineno)`: throws a javascript exception,
-     should automatically supply the correct file name
-     (triggered by `assert` and `throw` if hit)
-  - `derive(derivation_attrset)`: should realise a derivation
-     (used e.g. for import-from-derivation, also gets linked onto derivations)
-  - `import(cwd, to_be_imported_path)`: import a nix file,
-     should callback into the parser.
- **/
+ this crate converts Nix code into javascript code, and generates code
+ which is wrapped inside a function which expects a "runtime" object,
+ which should contain the following methods:
+ - `error(message, lineno)`: throws a javascript exception,
+    should automatically supply the correct file name
+    (triggered by `assert` and `throw` if hit)
+ - `derive(derivation_attrset)`: should realise a derivation
+    (used e.g. for import-from-derivation, also gets linked onto derivations)
+ - `import(cwd, to_be_imported_path)`: import a nix file,
+    should callback into the parser.
 
-use rnix::{types::*, StrPart, SyntaxKind as Sk};
-use std::borrow::Cow;
+ It also expects a `nixBlti` object as the second argument, which should
+ be the objects/namespace of all exported objects of the npm package `nix-builtins`.
+**/
+use rnix::{types::*, SyntaxNode as NixNode};
 use std::collections::HashMap;
 
-type NixNode = SyntaxNode<rnix::NixLanguage>;
-
-const NIX_BUILTINS: &str = "nixBlti";
+const NIX_BUILTINS_RT: &str = "nixBltiRT";
+const NIX_LAZY: &str = "nixBlti.Lazy";
+const NIX_FORCE: &str = "nixBlti.force";
+const NIXBLT_IN_SCOPE: &str = "nixBlti.inScope";
 const NIX_RUNTIME: &str = "nixRt";
 const NIX_IN_SCOPE: &str = "nixInScope";
 const NIX_LAMBDA_ARG_PFX: &str = "nix__";
@@ -42,7 +44,7 @@ impl Context<'_> {
             Some(x) => match x {
                 Sv::LambdaArg => format!("{}{}", NIX_LAMBDA_ARG_PFX, vn),
             },
-            None => format!("({}[\"{}\"])", NIX_IN_SCOPE, escape_str(s)),
+            None => format!("({}(\"{}\"))", NIX_IN_SCOPE, escape_str(vn)),
         }
     }
 
@@ -51,7 +53,7 @@ impl Context<'_> {
             None => {
                 *self.acc += alt;
                 Ok(())
-            },
+            }
             Some(x) => self.translate_node(x),
         }
     }
@@ -62,81 +64,90 @@ impl Context<'_> {
         }
 
         let txtrng = node.text_range();
-        let x = match ParsedType::try_from(node.clone()) {
-            Err(e) => return Err(vec![format!("{:?}: unable to parse node of kind {:?}", txtrng, e.0)]),
+        let x = match ParsedType::try_from(node) {
+            Err(e) => {
+                return Err(vec![format!(
+                    "{:?}: unable to parse node of kind {:?}",
+                    txtrng, e.0
+                )])
+            }
             Ok(x) => x,
         };
         use ParsedType as Pt;
 
         macro_rules! apush {
-            ($x:expr) => {{ *ctx.acc += $x; }}
+            ($x:expr) => {{
+                *self.acc += $x;
+            }};
         }
         macro_rules! rtv {
-            ($x:expr, $desc:expr) => {{ match $x {
-                None => return Err(vec![format!("{:?}: {} missing", txtrng, $desc)]),
-                Some(x) => self.translate_node(x)?,
-            }}}
-        };
+            ($x:expr, $desc:expr) => {{
+                match $x {
+                    None => return Err(vec![format!("{:?}: {} missing", txtrng, $desc)]),
+                    Some(x) => self.translate_node(x)?,
+                }
+            }};
+        }
 
-        Ok(match x {
+        match x {
             Pt::Apply(app) => {
                 apush!("((");
                 rtv!(app.lambda(), "lambda for application");
                 apush!(")(");
                 rtv!(app.value(), "value for application");
                 apush!("))");
-            },
+            }
 
             Pt::Assert(art) => {
                 apush!("((function() { ");
-                apush!(NIX_BUILTINS);
+                apush!(NIX_BUILTINS_RT);
                 apush!(".assert(");
                 rtv!(art.condition(), "condition for assert");
                 apush!("); return (");
                 rtv!(art.body(), "body for assert");
                 apush!("); })())");
-            },
+            }
 
             Pt::Key(key) => {
                 let mut fi = true;
                 apush!("[");
-                for i in d.path() {
+                for i in key.path() {
                     if fi {
                         fi = false;
                     } else {
-                        apush(",");
+                        apush!(",");
                     }
-                    rtv!(d.inner(), "inner for key");
+                    self.translate_node(i)?;
                 }
                 apush!("]");
-            },
+            }
 
             Pt::Dynamic(d) => {
                 // dynamic key component
-                apush!(NIX_BUILTINS);
-                apush!(".force(");
+                apush!(NIX_FORCE);
+                apush!("(");
                 rtv!(d.inner(), "inner for dynamic (key)");
                 apush!(")");
-            },
+            }
 
             // should be catched by `parsed.errors()...` in `translate(_)`
             Pt::Error(_) => unreachable!(),
 
-            Pt::Ident(id) => apush!(self.translate_varname(id)),
+            Pt::Ident(id) => apush!(&self.translate_varname(id.as_str())),
 
             Pt::IfElse(ie) => {
                 apush!("(new ");
-                apush!(NIX_BUILTINS);
-                apush!(".Lazy(function() { let nixRet = undefined; if(");
-                apush!(NIX_BUILTINS);
-                apush!(".force(");
-                rtv!(d.condition(), "condition for if-else");
+                apush!(NIX_LAZY);
+                apush!("(function() { let nixRet = undefined; if(");
+                apush!(NIX_FORCE);
+                apush!("(");
+                rtv!(ie.condition(), "condition for if-else");
                 apush!(")) { nixRet = ");
-                rtv!(d.body(), "if-body for if-else");
+                rtv!(ie.body(), "if-body for if-else");
                 apush!("; } else { nixRet = ");
-                rtv!(d.else_body(), "else-body for if-else");
+                rtv!(ie.else_body(), "else-body for if-else");
                 apush!("; }}))");
-            },
+            }
 
             Pt::Select(sel) => {
                 apush!("((");
@@ -148,25 +159,60 @@ impl Context<'_> {
                         apush!(val.as_str());
                         apush!("\"");
                     } else {
-                        self.translate_nodee(idx)?;
+                        self.translate_node(idx)?;
                     }
                 } else {
-                    return Err(vec![format!("{:?}: {} missing", txtrng, "index for selectr")])
+                    return Err(vec![format!(
+                        "{:?}: {} missing",
+                        txtrng, "index for selectr"
+                    )]);
                 }
                 apush!("])");
-            },
+            }
 
             Pt::Inherit(inh) => {
-                apush!("(");
-                apush!(NIX_BUILTINS);
-                apush!(".in_scope(nixInScope, undefined, function(nixInScope) {");
+                // TODO: the following stuff belongs in the handling of
+                // rec attrsets and let bindings
+                //apush!("((function(){");
+                //apush!("let nixInScope = inScope(nixInScope, undefined);");
                 // idk how to handle self-references....
-                unimplemented!();
-                apush!("}))");
-            },
+                //unimplemented!();
+                //apush!("})())");
+
+                if let Some(inhf) = inh.from() {
+                    apush!("((function(){ let nixInhR = ");
+                    rtv!(inhf.inner(), "inner for inherit-from");
+                    apush!(";");
+                    for id in inh.idents() {
+                        let idesc = escape_str(id.as_str());
+                        apush!(NIX_IN_SCOPE);
+                        apush!("(\"");
+                        apush!(&idesc);
+                        apush!("\",new ");
+                        apush!(NIX_LAZY);
+                        apush!("(()=>nixInhR[\"");
+                        apush!(&idesc);
+                        apush!("\"];));");
+                    }
+                    apush!("})())");
+                } else {
+                    for id in inh.idents() {
+                        let idas = id.as_str();
+                        apush!(NIX_IN_SCOPE);
+                        apush!("(\"");
+                        apush!(&escape_str(idas));
+                        apush!("\",");
+                        apush!(&self.translate_varname(idas));
+                        apush!(");");
+                    }
+                }
+            }
 
             // to be continued...
-        })
+            _ => unimplemented!(),
+        }
+
+        Ok(())
     }
 }
 
@@ -175,20 +221,23 @@ pub fn translate(s: &str) -> Result<String, Vec<String>> {
 
     // return any occured parsing errors
     {
-        let errs = parsed.errors().map(|i| i.to_string()).collect();
+        let errs = parsed.errors();
         if !errs.is_empty() {
-            return Err(errs);
+            return Err(errs.into_iter().map(|i| i.to_string()).collect());
         }
     }
 
-    // preamble
     let mut ret = String::new();
-    ret += "(function(nixRt) {\n";
-    ret += core::include_str!("blti.js");
-
-    ret += &translate_node(parsed)?;
-
-    // postamble
-    ret += "})";
-    return Ok(ret);
+    ret += "(function(nixRt,nixBlti) { ";
+    ret += NIX_BUILTINS_RT;
+    ret += " = nixBlti.initRtDep(nixRt); let ";
+    ret += NIX_IN_SCOPE;
+    ret += " = function(key, value) { console.error(\"illegal nixInScope call with key=\", key, \" value=\", value); };\n";
+    Context {
+        acc: &mut ret,
+        vars: Default::default(),
+    }
+    .translate_node(parsed.node())?;
+    ret += "\n})";
+    Ok(ret)
 }

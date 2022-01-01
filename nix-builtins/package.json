@@ -1,0 +1,32 @@
+{
+  "name": "nix-builtins",
+  "version": "0.1.0",
+  "description": "nix2js builtin functions",
+  "main": "index.min.js",
+  "type": "module",
+  "files": [],
+  "scripts": {
+    "prepare": "uglifyjs index.js -o index.min.js --v8 -c -m",
+    "test": "mocha index.test.js --require esm"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/YZITE/nix2js.git"
+  },
+  "keywords": [
+    "package manager"
+  ],
+  "author": "Yzix project developers",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/YZITE/nix2js/issues"
+  },
+  "homepage": "https://github.com/YZITE/nix2js#readme",
+  "devDependencies": {
+    "esm": "^3.2.25",
+    "lodash-es": "^4.17.21",
+    "mocha": "^9.1.3",
+    "uglify-js": "^3.14.5",
+    "webassert": "^3.0.2"
+  }
+}

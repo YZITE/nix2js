@@ -2,3 +2,5 @@ pkg
 result
 result-*
 target
+node_modules
+*.min.js
