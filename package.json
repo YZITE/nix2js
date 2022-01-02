@@ -2,6 +2,10 @@
   "name": "nix2js",
   "version": "0.0.0",
   "description": "environment for nix2js test REPL",
+  "private": true,
+  "workspaces": [
+    "nix-builtins"
+  ],
   "scripts": {},
   "repository": {
     "type": "git",
