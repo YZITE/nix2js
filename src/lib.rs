@@ -181,17 +181,22 @@ impl Context<'_> {
 
     fn translate_node_kv(&mut self, i: KeyValue, scope: &str) -> TranslateResult {
         let txtrng = i.node().text_range();
-        let line = self.txtrng_to_lineno(txtrng);
         let (kpfi, kpr);
         if let Some(key) = i.key() {
             let mut kpit = key.path();
             kpfi = match kpit.next() {
                 Some(kpfi) => kpfi,
-                None => err!(format!("line {}: key for key-value pair missing", line)),
+                None => err!(format!(
+                    "line {}: key for key-value pair missing",
+                    self.txtrng_to_lineno(txtrng)
+                )),
             };
             kpr = kpit.collect::<Vec<_>>();
         } else {
-            err!(format!("line {}: key for key-value pair missing", line));
+            err!(format!(
+                "line {}: key for key-value pair missing",
+                self.txtrng_to_lineno(txtrng)
+            ));
         };
 
         if kpr.is_empty() {
@@ -667,7 +672,11 @@ pub fn translate(s: &str, inp_name: &str) -> Result<(String, String), Vec<String
         }
     }
 
-    let (mut ret, mut names, mut mappings) = (String::new(), Vec::new(), Vec::new());
+    let (mut ret, mut names, mut mappings) = (
+        String::with_capacity(3 * s.len()),
+        Vec::new(),
+        Vec::with_capacity((3 * s.len()) / 5),
+    );
     ret += "(function(nixRt,nixBlti){";
     ret += NIX_BUILTINS_RT;
     ret += "=nixBlti.initRtDep(nixRt);let ";

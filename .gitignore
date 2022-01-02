@@ -1,6 +1,8 @@
+flamegraph.svg
 *.js.map
 *.min.js
 node_modules
+perf.data
 pkg
 result
 result-*
