@@ -17,8 +17,10 @@ class XpError {
     }
 }
 
-let instrum_blti = initRtDep({
-    error: function(msg, lno) { throw new XpError(msg, lno); }
+let instrum_blti = initRtDep(function(lno) {
+    return {
+        throw: function(msg) { throw new XpError(msg, lno); }
+    };
 });
 
 describe('Lazy', function() {

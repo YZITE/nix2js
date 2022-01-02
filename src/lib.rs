@@ -1,13 +1,16 @@
 /**
  this crate converts Nix code into javascript code, and generates code
- which is wrapped inside a function which expects a "runtime" object,
+ which is wrapped inside a function which expects a "runtime" function,
+ which is called with the invoking line number and should return an object,
  which should contain the following methods:
- - `error(message, lineno)`: throws a javascript exception,
+ - `throw(message)`: throws a javascript exception,
     should automatically supply the correct file name
     (triggered by `assert` and `throw` if hit)
+ - `abort(message)`: like `error`, but triggered by `abort` if hit
  - `derive(derivation_attrset)`: should realise a derivation
     (used e.g. for import-from-derivation, also gets linked onto derivations)
- - `import(cwd, to_be_imported_path)`: import a nix file,
+ - `export(anchor,path)`: export a path into the nix store
+ - `import(to_be_imported_path)`: import a nix file,
     should callback into the parser.
 
  It also expects a `nixBlti` object as the second argument, which should
@@ -23,7 +26,7 @@ const NIX_FORCE: &str = "nixBlti.force";
 const NIX_OR_DEFAULT: &str = "nixBlti.orDefault";
 const NIX_RUNTIME: &str = "nixRt";
 const NIX_IN_SCOPE: &str = "nixInScope";
-const NIX_IN_SCOPE_DEF: &str = "let nixInScope=nixBlti.mkScope(nixInScope);";
+const NIX_MK_SCOPE: &str = "nixBlti.mkScope(nixInScope)";
 const NIX_LAMBDA_ARG_PFX: &str = "nix__";
 const NIX_LAMBDA_BOUND: &str = "nixBound";
 
@@ -94,6 +97,9 @@ impl Context<'_> {
                     self.txtrng_to_lineno(txtrng),
                 )
             }
+            "abort" | "import" | "throw" => {
+                format!("{}({}).{}", NIX_RUNTIME, self.txtrng_to_lineno(txtrng), vn,)
+            }
             _ => match self.vars.iter().rev().find(|(ref i, _)| vn == i) {
                 Some((_, x)) => match x {
                     Sv::LambdaArg => format!("{}{}", NIX_LAMBDA_ARG_PFX, vn),
@@ -123,7 +129,7 @@ impl Context<'_> {
                 self.push(&format!(
                     "{}({},{}(()=>(",
                     scope,
-                    self.translate_ident(&name),
+                    escape_str(name.as_str()),
                     NIX_MKLAZY
                 ));
                 self.rtv(txtrng, i.value(), "value for key-value pair")?;
@@ -142,15 +148,16 @@ impl Context<'_> {
         node: &EH,
         body: NixNode,
     ) -> Result<(), Vec<String>> {
-        self.push(&format!("((){{{}", NIX_IN_SCOPE_DEF));
+        self.push(&format!("(({})=>{{", NIX_IN_SCOPE));
         for i in node.entries() {
             self.translate_node_kv(i, NIX_IN_SCOPE)?;
         }
         for i in node.inherits() {
             self.translate_node(i.node().clone())?;
         }
+        self.push("return ");
         self.translate_node(body)?;
-        self.push(")()");
+        self.push(&format!(";}})({})", NIX_MK_SCOPE));
         Ok(())
     }
 
@@ -251,15 +258,15 @@ impl Context<'_> {
             Pt::IfElse(ie) => {
                 self.push("new ");
                 self.push(NIX_LAZY);
-                self.push("(function() { let nixRet = undefined; if(");
+                self.push("(function(){let nixRet=undefined;if(");
                 self.push(NIX_FORCE);
                 self.push("(");
                 self.rtv(txtrng, ie.condition(), "condition for if-else")?;
-                self.push(")) { nixRet = ");
+                self.push(")){nixRet=");
                 self.rtv(txtrng, ie.body(), "if-body for if-else")?;
-                self.push("; } else { nixRet = ");
+                self.push(";}else{nixRet=");
                 self.rtv(txtrng, ie.else_body(), "else-body for if-else")?;
-                self.push("; }})");
+                self.push(";}return nixRet;})");
             }
 
             Pt::Inherit(inh) => {
@@ -272,7 +279,7 @@ impl Context<'_> {
                 //self.push("})())");
 
                 if let Some(inhf) = inh.from() {
-                    self.push("(function(){ let nixInhR = ");
+                    self.push("(function(){let nixInhR=");
                     self.rtv(txtrng, inhf.inner(), "inner for inherit-from")?;
                     self.push(";");
                     for id in inh.idents() {
@@ -359,7 +366,7 @@ impl Context<'_> {
                                 } else {
                                     // TODO: adjust error message to what Nix currently issues.
                                     self.push(&format!(
-                                        "let {zname}={arg}.{zas};if({zname}===undefined){{{rt}.error(\"attrset element {zas} missing at lambda call\",{lno});}} ",
+                                        "let {zname}={arg}.{zas};if({zname}===undefined){{{rt}({lno}).error(\"attrset element {zas} missing at lambda call\");}} ",
                                         arg = argname,
                                         zas = z.as_str(),
                                         zname = self.translate_ident(&z),
@@ -467,9 +474,7 @@ impl Context<'_> {
                 self.push(")[");
                 if let Some(idx) = sel.index() {
                     if let Some(val) = Ident::cast(idx.clone()) {
-                        self.push("\"");
-                        self.push(val.as_str());
-                        self.push("\"");
+                        self.push(&escape_str(val.as_str()));
                     } else {
                         self.translate_node(idx)?;
                     }
@@ -496,11 +501,11 @@ impl Context<'_> {
                             let txtrng = ast.node().text_range();
                             self.rtv(txtrng, ast.inner(), "inner for str-interpolate")?;
                             self.push(")");
-                        },
+                        }
                     }
                 }
                 self.push(")");
-            },
+            }
 
             Pt::StrInterpol(si) => self.rtv(txtrng, si.inner(), "inner for str-interpolate")?,
 
@@ -518,21 +523,24 @@ impl Context<'_> {
                 Ok(x) => {
                     use rnix::value::Value as NixVal;
                     use serde_json::value::{Number as JsNum, Value as JsVal};
-                    let jsv = match x {
+                    let jsvs = match x {
                         NixVal::Float(flt) => {
                             JsVal::Number(JsNum::from_f64(flt).expect("unrepr-able float"))
+                                .to_string()
                         }
-                        NixVal::Integer(int) => JsVal::Number(int.into()),
-                        NixVal::String(s) => JsVal::String(s),
+                        NixVal::Integer(int) => JsVal::Number(int.into()).to_string(),
+                        NixVal::String(s) => JsVal::String(s).to_string(),
                         NixVal::Path(anch, path) => {
-                            serde_json::json!({
-                                "type": "path",
-                                "anchor": format!("{:?}", anch),
-                                "path": path,
-                            })
+                            format!(
+                                "{}({}).export({},{})",
+                                NIX_RUNTIME,
+                                self.txtrng_to_lineno(txtrng),
+                                escape_str(&format!("{:?}", anch)),
+                                escape_str(&path),
+                            )
                         }
                     };
-                    self.push(&jsv.to_string());
+                    self.push(&jsvs);
                 }
                 Err(e) => err!(format!(
                     "line {}: value deserialization error: {}",
@@ -564,13 +572,13 @@ pub fn translate(s: &str) -> Result<String, Vec<String>> {
     ret += NIX_BUILTINS_RT;
     ret += "=nixBlti.initRtDep(nixRt);let ";
     ret += NIX_IN_SCOPE;
-    ret += "=undefined;\n";
+    ret += "=undefined;return ";
     Context {
         inp: s,
         acc: &mut ret,
         vars: Default::default(),
     }
     .translate_node(parsed.node())?;
-    ret += "\n})";
+    ret += ";})";
     Ok(ret)
 }

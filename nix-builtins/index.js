@@ -77,15 +77,17 @@ export function orDefault(lazy_selop, lazy_dfl) {
     return ret;
 }
 
-export function initRtDep(nixRt) {
+function fmt_fname(fname) {
+    if (fname.length != 1) {
+        return fname;
+    } else {
+        return "operator " + fname;
+    }
+}
+
+export function initRtDep(nixRt_) {
     return function(lineNo) {
-        function fmt_fname(fname) {
-            if (fname.length != 1) {
-                return fname;
-            } else {
-                return "operator " + fname;
-            }
-        }
+        let nixRt = nixRt_(lineNo);
 
         function binop_helper(fname, f) {
             return function(a, c) {
@@ -96,14 +98,14 @@ export function initRtDep(nixRt) {
                 if (tb === td) {
                     return f(b, d);
                 } else {
-                    nixRt.error(fmt_fname(fname) + ": given types mismatch (" + tb + " != " + td + ")", lineNo);
+                    nixRt.throw(fmt_fname(fname) + ": given types mismatch (" + tb + " != " + td + ")");
                 }
             };
         }
 
         function req_type(fname, x, xptype) {
             if (typeof x !== xptype) {
-                nixRt.error(fmt_fname(fname) + ": invalid input type (" + typeof x + "), expected (" + xptype + ")", lineNo);
+                nixRt.throw(fmt_fname(fname) + ": invalid input type (" + typeof x + "), expected (" + xptype + ")");
             }
         }
 
@@ -118,28 +120,28 @@ export function initRtDep(nixRt) {
                         req_type("builtins.add", b, "number");
                         return b + d;
                     } else {
-                        nixRt.error("builtins.add: given types mismatch (" + tb + " != " + td + ")", lineNo);
+                        nixRt.throw("builtins.add: given types mismatch (" + tb + " != " + td + ")");
                     }
                 };
             },
             assert: function(lineNo, cond) {
                 let cond2 = force(cond);
                 if (typeof cond2 !== 'boolean') {
-                    nixRt.error("assertion condition has wrong type (" + typeof cond2 + ")", lineNo);
+                    nixRt.throw("assertion condition has wrong type (" + typeof cond2 + ")");
                 } else if (!cond2) {
-                    nixRt.error("assertion failed", lineNo);
+                    nixRt.throw("assertion failed");
                 }
             },
             nixop__Concat: binop_helper("operator ++", function(a, b) {
                 if (typeof a !== 'object') {
-                    nixRt.error("operator ++: invalid input type (" + typeof a + ")", lineNo);
+                    nixRt.throw("operator ++: invalid input type (" + typeof a + ")");
                 }
                 return a.concat(b);
             }),
             // nixop__IsSet is implemented via .hasOwnProperty
             nixop__Update: binop_helper("operator //", function(a, b) {
                 if (typeof a !== 'object') {
-                    nixRt.error("operator //: invalid input type (" + typeof a + ")", lineNo);
+                    nixRt.throw("operator //: invalid input type (" + typeof a + ")");
                 }
                 return Object.assign({}, a, b);
             }),
@@ -157,7 +159,7 @@ export function initRtDep(nixRt) {
             nixop__Div: binop_helper("/", function(a, b) {
                 req_type("/", a, "number");
                 if (!b) {
-                    nixRt.error(fmt_fname("/") + ": division by zero", lineNo);
+                    nixRt.throw(fmt_fname("/") + ": division by zero");
                 }
                 return a * b;
             }),
