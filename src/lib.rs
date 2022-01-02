@@ -467,6 +467,7 @@ impl Context<'_> {
                                 err!(format!("lambda pattern ({:?}) has entry without name", y));
                             }
                         }
+                        // FIXME: handle missing ellipsis
                     } else {
                         err!(format!("lambda ({:?}) with invalid argument", lam));
                     }
