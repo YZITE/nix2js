@@ -149,7 +149,8 @@ impl Context<'_> {
             }
             _ => match self.vars.iter().rev().find(|(ref i, _)| vn == i) {
                 Some((_, x)) => match x {
-                    Sv::LambdaArg => format!("{}{}", NIX_LAMBDA_ARG_PFX, vn),
+                    // TODO: improve this
+                    Sv::LambdaArg => format!("{}{}", NIX_LAMBDA_ARG_PFX, vn.replace("-", "___")),
                 },
                 None => format!("{}({})", NIX_IN_SCOPE, escape_str(vn)),
             },
@@ -242,9 +243,9 @@ impl Context<'_> {
                 self.push(NIX_LAZY);
                 self.push("(()=>nixInhR[");
                 self.push(&idesc);
-                self.push("];));");
+                self.push("]));");
             }
-            self.push("})()");
+            self.push("})();");
         } else {
             for id in inh.idents() {
                 let idas = id.as_str();
@@ -436,34 +437,35 @@ impl Context<'_> {
                                 .push((z.as_str().to_string(), ScopedVar::LambdaArg));
                             self.translate_node_ident(&z)
                         } else {
+                            self.push(NIX_LAMBDA_BOUND);
                             NIX_LAMBDA_BOUND.to_string()
                         };
-                        self.push(&format!(
-                            "){{let {arg}={}({arg});",
-                            NIX_FORCE,
-                            arg = argname
-                        ));
-                        // } -- this fixes brace association
+                        self.push("){");
                         for i in y.entries() {
                             if let Some(z) = i.name() {
                                 self.vars
                                     .push((z.as_str().to_string(), ScopedVar::LambdaArg));
                                 self.push("let ");
                                 let zname = self.translate_node_ident(&z);
+                                let argzas = if z.as_str().contains(|i: char| !i.is_alphanumeric())
+                                {
+                                    format!("{}[{}]", argname, escape_str(z.as_str()))
+                                } else {
+                                    format!("{}.{}", argname, z.as_str())
+                                };
                                 if let Some(zdfl) = i.default() {
                                     self.push(&format!(
-                                        "=({arg}.{zas} !== undefined)?({arg}.{zas}):(",
-                                        arg = argname,
-                                        zas = z.as_str(),
+                                        "=({argzas} !== undefined)?({argzas}):(",
+                                        argzas = argzas,
                                     ));
                                     self.translate_node(zdfl)?;
                                     self.push(");");
                                 } else {
                                     // TODO: adjust error message to what Nix currently issues.
                                     self.push(&format!(
-                                        "={arg}.{zas};if({zname}===undefined){{{rt}.error(\"attrset element {zas} missing at lambda call\");}} ",
-                                        arg = argname,
-                                        zas = z.as_str(),
+                                        "={argzas};if({zname}===undefined){{{rt}.error(\"attrset element {zas} missing at lambda call\");}} ",
+                                        argzas = argzas,
+                                        zas = escape_str(z.as_str()).replace("\"", ""),
                                         zname = zname,
                                         rt = NIX_RUNTIME,
                                     ));
