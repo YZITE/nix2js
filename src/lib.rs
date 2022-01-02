@@ -1,7 +1,6 @@
 /**
  this crate converts Nix code into javascript code, and generates code
- which is wrapped inside a function which expects a "runtime" function,
- which is called with the invoking line number and should return an object,
+ which is wrapped inside a function which expects a "runtime" object,
  which should contain the following methods:
  - `throw(message)`: throws a javascript exception,
     should automatically supply the correct file name
@@ -17,6 +16,9 @@
  be the objects/namespace of all exported objects of the npm package `nix-builtins`.
 **/
 use rnix::{types::*, SyntaxNode as NixNode};
+
+mod postracker;
+use postracker::PosTracker;
 
 const NIX_BUILTINS_RT: &str = "nixBltiRT";
 const NIX_LAZY: &str = "nixBlti.Lazy";
@@ -38,6 +40,11 @@ struct Context<'a> {
     inp: &'a str,
     acc: &'a mut String,
     vars: Vec<(String, ScopedVar)>,
+    names: &'a mut Vec<String>,
+    mappings: &'a mut Vec<u8>,
+    // tracking positions for offset calc
+    lp_src: PosTracker,
+    lp_dst: PosTracker,
 }
 
 fn escape_str(s: &str) -> String {
@@ -62,6 +69,51 @@ impl Context<'_> {
         *self.acc += x;
     }
 
+    fn snapshot_pos(&mut self, inpos: rnix::TextSize, is_ident: bool) -> Option<()> {
+        let (mut lp_src, mut lp_dst) = (self.lp_src, self.lp_dst);
+        let (ident, src_oline, src_ocol) =
+            lp_src.update(self.inp.as_bytes(), usize::from(inpos))?;
+        let (_, dst_oline, dst_ocol) = lp_dst.update(self.acc.as_bytes(), self.acc.len())?;
+        let (src_oline, src_ocol): (u32, u32) =
+            (src_oline.try_into().unwrap(), src_ocol.try_into().unwrap());
+        let (dst_oline, dst_ocol): (u32, u32) =
+            (dst_oline.try_into().unwrap(), dst_ocol.try_into().unwrap());
+
+        if dst_oline == 0 && dst_ocol == 0 && src_oline == 0 && src_ocol == 0 {
+            return Some(());
+        }
+
+        for _ in 0..dst_oline {
+            self.mappings.push(b';');
+        }
+        if dst_oline == 0 && !self.mappings.is_empty() {
+            self.mappings.push(b',');
+        }
+        use vlq::encode as vlqe;
+        vlqe(dst_ocol.into(), &mut self.mappings).unwrap();
+        vlqe(0, self.mappings).unwrap();
+        vlqe(src_oline.into(), &mut self.mappings).unwrap();
+        vlqe(src_ocol.into(), &mut self.mappings).unwrap();
+        if is_ident {
+            if let Ok(ident) = std::str::from_utf8(ident) {
+                // reuse ident if already present
+                let idx = match self.names.iter().enumerate().find(|(_, i)| **i == ident) {
+                    Some((idx, _)) => idx,
+                    None => {
+                        let idx = self.names.len();
+                        self.names.push(ident.to_string());
+                        idx
+                    }
+                };
+                vlqe(idx.try_into().unwrap(), &mut self.mappings).unwrap();
+            }
+        }
+
+        self.lp_src = lp_src;
+        self.lp_dst = lp_dst;
+        Some(())
+    }
+
     fn txtrng_to_lineno(&self, txtrng: rnix::TextRange) -> usize {
         let bytepos: usize = txtrng.start().into();
         self.inp
@@ -84,23 +136,16 @@ impl Context<'_> {
         }
     }
 
-    fn translate_varname(&self, vn: &str, txtrng: rnix::TextRange) -> String {
+    fn translate_varname(&self, vn: &str) -> String {
         use ScopedVar as Sv;
         match vn {
-            "builtins" => {
-                // keep the builtins informed about the line number
-                format!("{}({})", NIX_BUILTINS_RT, self.txtrng_to_lineno(txtrng))
-            }
+            "builtins" => NIX_BUILTINS_RT.to_string(),
             "derivation" => {
                 // aliased name for derivation builtin
-                format!(
-                    "{}({}).derivation",
-                    NIX_BUILTINS_RT,
-                    self.txtrng_to_lineno(txtrng),
-                )
+                format!("{}.derivation", NIX_BUILTINS_RT,)
             }
             "abort" | "import" | "throw" => {
-                format!("{}({}).{}", NIX_RUNTIME, self.txtrng_to_lineno(txtrng), vn,)
+                format!("{}.{}", NIX_RUNTIME, vn)
             }
             _ => match self.vars.iter().rev().find(|(ref i, _)| vn == i) {
                 Some((_, x)) => match x {
@@ -111,36 +156,63 @@ impl Context<'_> {
         }
     }
 
-    fn translate_ident(&self, id: &Ident) -> String {
-        self.translate_varname(id.as_str(), id.node().text_range())
+    fn translate_node_ident(&mut self, id: &Ident) -> String {
+        let txtrng = id.node().text_range();
+        // if we don't make this conditional, we would record
+        // scrambled identifiers otherwise...
+        let is_ident = self.snapshot_pos(txtrng.start(), false).is_some();
+        let ret = self.translate_varname(id.as_str());
+        self.push(&ret);
+        self.snapshot_pos(txtrng.end(), is_ident);
+        ret
+    }
+
+    fn translate_node_key_element(&mut self, node: NixNode) -> TranslateResult {
+        if let Some(name) = Ident::cast(node.clone()) {
+            let txtrng = name.node().text_range();
+            let is_ident = self.snapshot_pos(txtrng.start(), false).is_some();
+            self.push(&escape_str(name.as_str()));
+            self.snapshot_pos(txtrng.end(), is_ident);
+        } else {
+            self.translate_node(node)?;
+        }
+        Ok(())
     }
 
     fn translate_node_kv(&mut self, i: KeyValue, scope: &str) -> TranslateResult {
         let txtrng = i.node().text_range();
-        let kp: Vec<_> = if let Some(key) = i.key() {
-            key.path().collect()
+        let line = self.txtrng_to_lineno(txtrng);
+        let (kpfi, kpr);
+        if let Some(key) = i.key() {
+            let mut kpit = key.path();
+            kpfi = match kpit.next() {
+                Some(kpfi) => kpfi,
+                None => err!(format!("line {}: key for key-value pair missing", line)),
+            };
+            kpr = kpit.collect::<Vec<_>>();
         } else {
-            err!(format!(
-                "line {}: key for key-value pair missing",
-                self.txtrng_to_lineno(txtrng)
-            ));
+            err!(format!("line {}: key for key-value pair missing", line));
         };
 
-        if let [name] = &kp[..] {
-            if let Some(name) = Ident::cast(name.clone()) {
-                self.push(&format!(
-                    "{}({},{}(()=>(",
-                    scope,
-                    escape_str(name.as_str()),
-                    NIX_MKLAZY
-                ));
-                self.rtv(txtrng, i.value(), "value for key-value pair")?;
-                self.push(")));");
-            } else {
-                unimplemented!("unsupported key-value pair: {:?}", kp);
-            }
+        if kpr.is_empty() {
+            self.push(&format!("{}(", scope));
+            self.translate_node_key_element(kpfi)?;
+            self.push(&format!(",{}(()=>(", NIX_MKLAZY));
+            self.rtv(txtrng, i.value(), "value for key-value pair")?;
+            self.push(")));");
         } else {
-            unimplemented!("unsupported key-value pair: {:?}", kp);
+            self.push(&format!("{}._deepMerge({}(", NIX_BUILTINS_RT, scope));
+            // this is a bit cheating because we directly override
+            // parts of the attrset instead of round-tripping thru $`scope`.
+            self.translate_node_key_element(kpfi)?;
+            self.push(&format!("),{}(()=>(", NIX_MKLAZY));
+            self.rtv(txtrng, i.value(), "value for key-value pair")?;
+            self.push("))");
+            for i in kpr {
+                self.push(",");
+                self.translate_node_key_element(i)?;
+            }
+            self.push(");");
         }
         Ok(())
     }
@@ -175,7 +247,7 @@ impl Context<'_> {
                 self.push("(");
                 self.push(&escape_str(idas));
                 self.push(",");
-                self.push(&self.translate_ident(&id));
+                self.translate_node_ident(&id);
                 self.push(");");
             }
         }
@@ -222,7 +294,6 @@ impl Context<'_> {
             Ok(x) => x,
         };
         use ParsedType as Pt;
-        let builtins = self.translate_varname("builtins", txtrng);
 
         match x {
             Pt::Apply(app) => {
@@ -235,7 +306,7 @@ impl Context<'_> {
 
             Pt::Assert(art) => {
                 self.push("(()=>{");
-                self.push(&builtins);
+                self.push(NIX_BUILTINS_RT);
                 self.push(".assert(");
                 self.rtv(txtrng, art.condition(), "condition for assert")?;
                 self.push("); return (");
@@ -278,7 +349,7 @@ impl Context<'_> {
                             self.push("))");
                         }
                         _ => {
-                            self.push(&format!("{}.nixop__{:?}", builtins, op));
+                            self.push(&format!("{}.nixop__{:?}", NIX_BUILTINS_RT, op));
                             self.push(&format!("({mklazy}(()=>", mklazy = NIX_MKLAZY));
                             self.rtv(txtrng, bo.lhs(), "lhs for binop")?;
                             self.push(&format!("),{mklazy}(()=>", mklazy = NIX_MKLAZY));
@@ -305,7 +376,9 @@ impl Context<'_> {
             // should be catched by `parsed.errors()...` in `translate(_)`
             Pt::Error(_) => unreachable!(),
 
-            Pt::Ident(id) => self.push(&self.translate_ident(&id)),
+            Pt::Ident(id) => {
+                self.translate_node_ident(&id);
+            }
 
             Pt::IfElse(ie) => {
                 self.push("new ");
@@ -349,19 +422,19 @@ impl Context<'_> {
                     if let Some(y) = Ident::cast(x.clone()) {
                         let yas = y.as_str();
                         self.vars.push((yas.to_string(), ScopedVar::LambdaArg));
-                        self.push(&self.translate_ident(&y));
+                        self.translate_node_ident(&y);
                         self.push("){");
                         // } -- this fixes brace association
                     } else if let Some(y) = Pattern::cast(x) {
                         let argname = if let Some(z) = y.at() {
                             self.vars
                                 .push((z.as_str().to_string(), ScopedVar::LambdaArg));
-                            self.translate_ident(&z)
+                            self.translate_node_ident(&z)
                         } else {
                             NIX_LAMBDA_BOUND.to_string()
                         };
                         self.push(&format!(
-                            "{arg}){{let {arg}={}({arg});",
+                            "){{let {arg}={}({arg});",
                             NIX_FORCE,
                             arg = argname
                         ));
@@ -370,24 +443,24 @@ impl Context<'_> {
                             if let Some(z) = i.name() {
                                 self.vars
                                     .push((z.as_str().to_string(), ScopedVar::LambdaArg));
+                                self.push("let ");
+                                let zname = self.translate_node_ident(&z);
                                 if let Some(zdfl) = i.default() {
                                     self.push(&format!(
-                                        "let {zname}=({arg}.{zas} !== undefined)?({arg}.{zas}):(",
+                                        "=({arg}.{zas} !== undefined)?({arg}.{zas}):(",
                                         arg = argname,
                                         zas = z.as_str(),
-                                        zname = self.translate_ident(&z)
                                     ));
                                     self.translate_node(zdfl)?;
                                     self.push(");");
                                 } else {
                                     // TODO: adjust error message to what Nix currently issues.
                                     self.push(&format!(
-                                        "let {zname}={arg}.{zas};if({zname}===undefined){{{rt}({lno}).error(\"attrset element {zas} missing at lambda call\");}} ",
+                                        "={arg}.{zas};if({zname}===undefined){{{rt}.error(\"attrset element {zas} missing at lambda call\");}} ",
                                         arg = argname,
                                         zas = z.as_str(),
-                                        zname = self.translate_ident(&z),
+                                        zname = zname,
                                         rt = NIX_RUNTIME,
-                                        lno = self.txtrng_to_lineno(z.node().text_range())
                                     ));
                                 }
                             } else {
@@ -534,7 +607,7 @@ impl Context<'_> {
                 match uo.operator() {
                     Uok::Invert | Uok::Negate => {}
                 }
-                self.push(&format!("{}.nixuop__{:?}(", builtins, uo.operator()));
+                self.push(&format!("{}.nixuop__{:?}(", NIX_BUILTINS_RT, uo.operator()));
                 self.rtv(txtrng, uo.value(), "value for unary-op")?;
                 self.push(")");
             }
@@ -576,7 +649,7 @@ impl Context<'_> {
     }
 }
 
-pub fn translate(s: &str) -> Result<String, Vec<String>> {
+pub fn translate(s: &str, inp_name: &str) -> Result<(String, String), Vec<String>> {
     let parsed = rnix::parse(s);
 
     // return any occured parsing errors
@@ -587,7 +660,7 @@ pub fn translate(s: &str) -> Result<String, Vec<String>> {
         }
     }
 
-    let mut ret = String::new();
+    let (mut ret, mut names, mut mappings) = (String::new(), Vec::new(), Vec::new());
     ret += "(function(nixRt,nixBlti){";
     ret += NIX_BUILTINS_RT;
     ret += "=nixBlti.initRtDep(nixRt);let ";
@@ -597,8 +670,22 @@ pub fn translate(s: &str) -> Result<String, Vec<String>> {
         inp: s,
         acc: &mut ret,
         vars: Default::default(),
+        names: &mut names,
+        mappings: &mut mappings,
+        lp_src: Default::default(),
+        lp_dst: Default::default(),
     }
     .translate_node(parsed.node())?;
     ret += ";})";
-    Ok(ret)
+    let mappings = String::from_utf8(mappings).unwrap();
+    Ok((
+        ret,
+        serde_json::json!({
+            "version": 3,
+            "sources": [inp_name.to_string()],
+            "names": names,
+            "mappings": mappings,
+        })
+        .to_string(),
+    ))
 }

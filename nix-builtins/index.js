@@ -85,128 +85,147 @@ function fmt_fname(fname) {
     }
 }
 
-export function initRtDep(nixRt_) {
-    return function(lineNo) {
-        let nixRt = nixRt_(lineNo);
+export function initRtDep(nixRt) {
+    function binop_helper(fname, f) {
+        return function(a, c) {
+            let b = force(a);
+            let d = force(c);
+            let tb = typeof b;
+            let td = typeof d;
+            if (tb === td) {
+                return f(b, d);
+            } else {
+                nixRt.throw(fmt_fname(fname) + ": given types mismatch (" + tb + " != " + td + ")");
+            }
+        };
+    }
 
-        function binop_helper(fname, f) {
-            return function(a, c) {
+    function req_type(fname, x, xptype) {
+        if (typeof x !== xptype) {
+            nixRt.throw(fmt_fname(fname) + ": invalid input type (" + typeof x + "), expected (" + xptype + ")");
+        }
+    }
+
+    return {
+        add: function(a) {
+            return function(c) {
                 let b = force(a);
                 let d = force(c);
                 let tb = typeof b;
                 let td = typeof d;
                 if (tb === td) {
-                    return f(b, d);
+                    req_type("builtins.add", b, "number");
+                    return b + d;
                 } else {
-                    nixRt.throw(fmt_fname(fname) + ": given types mismatch (" + tb + " != " + td + ")");
+                    nixRt.throw("builtins.add: given types mismatch (" + tb + " != " + td + ")");
                 }
             };
-        }
-
-        function req_type(fname, x, xptype) {
-            if (typeof x !== xptype) {
-                nixRt.throw(fmt_fname(fname) + ": invalid input type (" + typeof x + "), expected (" + xptype + ")");
+        },
+        assert: function(cond) {
+            let cond2 = force(cond);
+            if (typeof cond2 !== 'boolean') {
+                nixRt.throw("assertion condition has wrong type (" + typeof cond2 + ")");
+            } else if (!cond2) {
+                nixRt.throw("assertion failed");
             }
-        }
-
-        return {
-            add: function(a) {
-                return function(c) {
-                    let b = force(a);
-                    let d = force(c);
-                    let tb = typeof b;
-                    let td = typeof d;
-                    if (tb === td) {
-                        req_type("builtins.add", b, "number");
-                        return b + d;
-                    } else {
-                        nixRt.throw("builtins.add: given types mismatch (" + tb + " != " + td + ")");
+        },
+        _deepMerge: function(attrs_, value, ...path) {
+            let attrs = attrs_;
+            while(1) {
+                let pfi = path.shift();
+                if (pfi === undefined) {
+                    nixRt.throw("deepMerge: encountered empty path");
+                    break;
+                }
+                if (typeof attrs !== 'object') {
+                    nixRt.throw("deepMerge: tried to merge attrset into non-object (", attrs, ")");
+                    break;
+                }
+                if (path.length) {
+                    if (!attrs.hasOwnProperty(pfi)) {
+                        attrs[pfi] = {};
                     }
-                };
-            },
-            assert: function(lineNo, cond) {
-                let cond2 = force(cond);
-                if (typeof cond2 !== 'boolean') {
-                    nixRt.throw("assertion condition has wrong type (" + typeof cond2 + ")");
-                } else if (!cond2) {
-                    nixRt.throw("assertion failed");
+                    attrs = attrs[pfi];
+                } else {
+                    attrs[pfi] = value;
+                    break;
                 }
-            },
-            nixop__Concat: binop_helper("operator ++", function(a, b) {
-                if (typeof a !== 'object') {
-                    nixRt.throw("operator ++: invalid input type (" + typeof a + ")");
-                }
-                return a.concat(b);
-            }),
-            // nixop__IsSet is implemented via .hasOwnProperty
-            nixop__Update: binop_helper("operator //", function(a, b) {
-                if (typeof a !== 'object') {
-                    nixRt.throw("operator //: invalid input type (" + typeof a + ")");
-                }
-                return Object.assign({}, a, b);
-            }),
-            nixop__Add: binop_helper("+", function(a, b) {
-                return a + b;
-            }),
-            nixop__Sub: binop_helper("-", function(a, b) {
-                req_type("-", a, "number");
-                return a - b;
-            }),
-            nixop__Mul: binop_helper("*", function(a, b) {
-                req_type("*", a, "number");
-                return a * b;
-            }),
-            nixop__Div: binop_helper("/", function(a, b) {
-                req_type("/", a, "number");
-                if (!b) {
-                    nixRt.throw(fmt_fname("/") + ": division by zero");
-                }
-                return a * b;
-            }),
-            nixop__And: binop_helper("&&", function(a, b) {
-                req_type("&&", a, "boolean");
-                return a && b;
-            }),
-            nixop__Implication: binop_helper("->", function(a, b) {
-                req_type("->", a, "boolean");
-                return (!a) || b;
-            }),
-            nixop__Or: binop_helper("||", function(a, b) {
-                req_type("||", a, "boolean");
-                return a || b;
-            }),
-            nixop__Equal: function(a, c) {
-                let b = force(a);
-                let d = force(c);
-                return isEqual(b, d);
-            },
-            nixop__NotEqual: function(a, c) {
-                let b = force(a);
-                let d = force(c);
-                return !isEqual(b, d);
-            },
-            nixop__Less: binop_helper("<", function(a, b) {
-                req_type("<", a, "number");
-                return a < b;
-            }),
-            nixop__LessOrEq: binop_helper("<=", function(a, b) {
-                req_type("<=", a, "number");
-                return a <= b;
-            }),
-            nixop__More: binop_helper(">", function(a, b) {
-                req_type(">", a, "number");
-                return a > b;
-            }),
-            nixop__MoreOrEq: binop_helper(">=", function(a, b) {
-                req_type(">=", a, "number");
-                return a >= b;
-            }),
-            nixuop__Invert: function(a) {
-                return !force(a);
-            },
-            nixuop__Negate: function(a) {
-                return -force(a);
             }
-        };
+        },
+        nixop__Concat: binop_helper("operator ++", function(a, b) {
+            if (typeof a !== 'object') {
+                nixRt.throw("operator ++: invalid input type (" + typeof a + ")");
+            }
+            return a.concat(b);
+        }),
+        // nixop__IsSet is implemented via .hasOwnProperty
+        nixop__Update: binop_helper("operator //", function(a, b) {
+            if (typeof a !== 'object') {
+                nixRt.throw("operator //: invalid input type (" + typeof a + ")");
+            }
+            return Object.assign({}, a, b);
+        }),
+        nixop__Add: binop_helper("+", function(a, b) {
+            return a + b;
+        }),
+        nixop__Sub: binop_helper("-", function(a, b) {
+            req_type("-", a, "number");
+            return a - b;
+        }),
+        nixop__Mul: binop_helper("*", function(a, b) {
+            req_type("*", a, "number");
+            return a * b;
+        }),
+        nixop__Div: binop_helper("/", function(a, b) {
+            req_type("/", a, "number");
+            if (!b) {
+                nixRt.throw(fmt_fname("/") + ": division by zero");
+            }
+            return a * b;
+        }),
+        nixop__And: binop_helper("&&", function(a, b) {
+            req_type("&&", a, "boolean");
+            return a && b;
+        }),
+        nixop__Implication: binop_helper("->", function(a, b) {
+            req_type("->", a, "boolean");
+            return (!a) || b;
+        }),
+        nixop__Or: binop_helper("||", function(a, b) {
+            req_type("||", a, "boolean");
+            return a || b;
+        }),
+        nixop__Equal: function(a, c) {
+            let b = force(a);
+            let d = force(c);
+            return isEqual(b, d);
+        },
+        nixop__NotEqual: function(a, c) {
+            let b = force(a);
+            let d = force(c);
+            return !isEqual(b, d);
+        },
+        nixop__Less: binop_helper("<", function(a, b) {
+            req_type("<", a, "number");
+            return a < b;
+        }),
+        nixop__LessOrEq: binop_helper("<=", function(a, b) {
+            req_type("<=", a, "number");
+            return a <= b;
+        }),
+        nixop__More: binop_helper(">", function(a, b) {
+            req_type(">", a, "number");
+            return a > b;
+        }),
+        nixop__MoreOrEq: binop_helper(">=", function(a, b) {
+            req_type(">=", a, "number");
+            return a >= b;
+        }),
+        nixuop__Invert: function(a) {
+            return !force(a);
+        },
+        nixuop__Negate: function(a) {
+            return -force(a);
+        }
     };
 }

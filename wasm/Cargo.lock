@@ -96,6 +96,7 @@ version = "0.1.0"
 dependencies = [
  "rnix",
  "serde_json",
+ "vlq",
 ]
 
 [[package]]
@@ -103,6 +104,7 @@ name = "nix2js-wasm"
 version = "0.1.0"
 dependencies = [
  "console_error_panic_hook",
+ "js-sys",
  "nix2js",
  "wasm-bindgen",
  "wasm-bindgen-test",
@@ -224,6 +226,12 @@ name = "unicode-xid"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ccb82d61f80a663efe1f787a51b16b5a51e3314d6ac365b08639f52387b33f3"
+
+[[package]]
+name = "vlq"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "65dd7eed29412da847b0f78bcec0ac98588165988a8cfe41d4ea1d429f8ccfff"
 
 [[package]]
 name = "wasm-bindgen"
