@@ -200,7 +200,13 @@ export function initRtDep(nixRt_) {
             nixop__MoreOrEq: binop_helper(">=", function(a, b) {
                 req_type(">=", a, "number");
                 return a >= b;
-            })
+            }),
+            nixuop__Invert: function(a) {
+                return !force(a);
+            },
+            nixuop__Negate: function(a) {
+                return -force(a);
+            }
         };
     };
 }
