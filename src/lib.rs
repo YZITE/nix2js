@@ -50,6 +50,13 @@ macro_rules! err {
     }};
 }
 
+enum LetBody {
+    Nix(NixNode),
+    Js(String),
+}
+
+type TranslateResult = Result<(), Vec<String>>;
+
 impl Context<'_> {
     fn push(&mut self, x: &str) {
         *self.acc += x;
@@ -64,12 +71,7 @@ impl Context<'_> {
             .count()
     }
 
-    fn rtv(
-        &mut self,
-        txtrng: rnix::TextRange,
-        x: Option<NixNode>,
-        desc: &str,
-    ) -> Result<(), Vec<String>> {
+    fn rtv(&mut self, txtrng: rnix::TextRange, x: Option<NixNode>, desc: &str) -> TranslateResult {
         match x {
             None => {
                 err!(format!(
@@ -113,7 +115,7 @@ impl Context<'_> {
         self.translate_varname(id.as_str(), id.node().text_range())
     }
 
-    fn translate_node_kv(&mut self, i: KeyValue, scope: &str) -> Result<(), Vec<String>> {
+    fn translate_node_kv(&mut self, i: KeyValue, scope: &str) -> TranslateResult {
         let txtrng = i.node().text_range();
         let kp: Vec<_> = if let Some(key) = i.key() {
             key.path().collect()
@@ -143,25 +145,66 @@ impl Context<'_> {
         Ok(())
     }
 
+    fn translate_node_inherit(&mut self, inh: Inherit, scope: &str) -> TranslateResult {
+        if let Some(inhf) = inh.from() {
+            self.push("(function(){let nixInhR=");
+            self.push(NIX_FORCE);
+            self.push("(");
+            self.rtv(
+                inhf.node().text_range(),
+                inhf.inner(),
+                "inner for inherit-from",
+            )?;
+            self.push(");");
+            for id in inh.idents() {
+                let idesc = escape_str(id.as_str());
+                self.push(scope);
+                self.push("(");
+                self.push(&idesc);
+                self.push(",new ");
+                self.push(NIX_LAZY);
+                self.push("(()=>nixInhR[");
+                self.push(&idesc);
+                self.push("];));");
+            }
+            self.push("})()");
+        } else {
+            for id in inh.idents() {
+                let idas = id.as_str();
+                self.push(scope);
+                self.push("(");
+                self.push(&escape_str(idas));
+                self.push(",");
+                self.push(&self.translate_ident(&id));
+                self.push(");");
+            }
+        }
+        Ok(())
+    }
+
     fn translate_let<EH: EntryHolder>(
         &mut self,
         node: &EH,
-        body: NixNode,
-    ) -> Result<(), Vec<String>> {
-        self.push(&format!("(({})=>{{", NIX_IN_SCOPE));
+        body: LetBody,
+        scope: &str,
+    ) -> TranslateResult {
+        self.push(&format!("(({})=>{{", scope));
         for i in node.entries() {
-            self.translate_node_kv(i, NIX_IN_SCOPE)?;
+            self.translate_node_kv(i, scope)?;
         }
         for i in node.inherits() {
-            self.translate_node(i.node().clone())?;
+            self.translate_node_inherit(i, scope)?;
         }
         self.push("return ");
-        self.translate_node(body)?;
+        match body {
+            LetBody::Nix(body) => self.translate_node(body)?,
+            LetBody::Js(s) => self.push(&s),
+        }
         self.push(&format!(";}})({})", NIX_MK_SCOPE));
         Ok(())
     }
 
-    fn translate_node(&mut self, node: NixNode) -> Result<(), Vec<String>> {
+    fn translate_node(&mut self, node: NixNode) -> TranslateResult {
         if node.kind().is_trivia() {
             return Ok(());
         }
@@ -200,7 +243,15 @@ impl Context<'_> {
                 self.push("); })()");
             }
 
-            Pt::AttrSet(_) => unimplemented!(),
+            Pt::AttrSet(ars) => {
+                let scope = if ars.recursive() {
+                    NIX_IN_SCOPE
+                } else {
+                    "nixAttrsScope"
+                };
+                // calling the scope with no arguments gives us the constructed attrset
+                self.translate_let(&ars, LetBody::Js(format!("{}()", scope)), scope)?;
+            }
 
             Pt::BinOp(bo) => {
                 if let Some(op) = bo.operator() {
@@ -270,43 +321,7 @@ impl Context<'_> {
                 self.push(";}return nixRet;})");
             }
 
-            Pt::Inherit(inh) => {
-                // TODO: the following stuff belongs in the handling of
-                // rec attrsets and let bindings
-                //self.push("((function(){");
-                //self.push("let nixInScope = inScope(nixInScope, undefined);");
-                // idk how to handle self-references....
-                //unimplemented!();
-                //self.push("})())");
-
-                if let Some(inhf) = inh.from() {
-                    self.push("(function(){let nixInhR=");
-                    self.rtv(txtrng, inhf.inner(), "inner for inherit-from")?;
-                    self.push(";");
-                    for id in inh.idents() {
-                        let idesc = escape_str(id.as_str());
-                        self.push(NIX_IN_SCOPE);
-                        self.push("(");
-                        self.push(&idesc);
-                        self.push(",new ");
-                        self.push(NIX_LAZY);
-                        self.push("(()=>nixInhR[");
-                        self.push(&idesc);
-                        self.push("];));");
-                    }
-                    self.push("})()");
-                } else {
-                    for id in inh.idents() {
-                        let idas = id.as_str();
-                        self.push(NIX_IN_SCOPE);
-                        self.push("(");
-                        self.push(&escape_str(idas));
-                        self.push(",");
-                        self.push(&self.translate_ident(&id));
-                        self.push(");");
-                    }
-                }
-            }
+            Pt::Inherit(inh) => self.translate_node_inherit(inh, NIX_IN_SCOPE)?,
 
             Pt::InheritFrom(inhf) => self.rtv(txtrng, inhf.inner(), "inner for inherit-from")?,
 
@@ -394,39 +409,43 @@ impl Context<'_> {
 
             Pt::LegacyLet(l) => self.translate_let(
                 &l,
-                l.entries()
-                    .find(|i| {
-                        let kp: Vec<_> = if let Some(key) = i.key() {
-                            key.path().collect()
-                        } else {
-                            return false;
-                        };
-                        if let [name] = &kp[..] {
-                            if let Some(name) = Ident::cast(name.clone()) {
-                                if name.as_str() == "body" {
-                                    return true;
+                LetBody::Nix(
+                    l.entries()
+                        .find(|i| {
+                            let kp: Vec<_> = if let Some(key) = i.key() {
+                                key.path().collect()
+                            } else {
+                                return false;
+                            };
+                            if let [name] = &kp[..] {
+                                if let Some(name) = Ident::cast(name.clone()) {
+                                    if name.as_str() == "body" {
+                                        return true;
+                                    }
                                 }
                             }
-                        }
-                        false
-                    })
-                    .and_then(|i| i.value())
-                    .ok_or_else(|| {
-                        vec![format!(
-                            "line {}: legacy let {{ ... }} without body assignment",
-                            self.txtrng_to_lineno(l.node().text_range())
-                        )]
-                    })?,
+                            false
+                        })
+                        .and_then(|i| i.value())
+                        .ok_or_else(|| {
+                            vec![format!(
+                                "line {}: legacy let {{ ... }} without body assignment",
+                                self.txtrng_to_lineno(l.node().text_range())
+                            )]
+                        })?,
+                ),
+                NIX_IN_SCOPE,
             )?,
 
             Pt::LetIn(l) => self.translate_let(
                 &l,
-                l.body().ok_or_else(|| {
+                LetBody::Nix(l.body().ok_or_else(|| {
                     vec![format!(
                         "line {}: let ... in ... without body",
                         self.txtrng_to_lineno(l.node().text_range())
                     )]
-                })?,
+                })?),
+                NIX_IN_SCOPE,
             )?,
 
             Pt::List(l) => {
