@@ -1,0 +1,19 @@
+{
+  "name": "nix2js",
+  "version": "0.0.0",
+  "description": "environment for nix2js test REPL",
+  "scripts": {},
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/YZITE/nix2js.git"
+  },
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/YZITE/nix2js/issues"
+  },
+  "homepage": "https://github.com/YZITE/nix2js#readme",
+  "dependencies": {
+    "nix-builtins": "file:nix-builtins"
+  }
+}

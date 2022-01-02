@@ -30,12 +30,12 @@ export function force(value) {
 
 // this ensures correct evaluation when evaluating lazy values
 export function mkLazy(maker) {
-    return Lazy(()=>force(maker()));
+    return new Lazy(()=>force(maker()));
 }
 
 export function delay(value) {
     if (!(value instanceof Lazy)) {
-        return Lazy(()=>value);
+        return new Lazy(()=>value);
     } else {
         return value;
     }

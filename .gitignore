@@ -4,3 +4,4 @@ result-*
 target
 node_modules
 *.min.js
+*.js.map

@@ -179,6 +179,7 @@ impl Context<'_> {
             Ok(x) => x,
         };
         use ParsedType as Pt;
+        let builtins = self.translate_varname("builtins", txtrng);
 
         match x {
             Pt::Apply(app) => {
@@ -190,8 +191,8 @@ impl Context<'_> {
             }
 
             Pt::Assert(art) => {
-                self.push("(function() { ");
-                self.push(NIX_BUILTINS_RT);
+                self.push("(()=>{");
+                self.push(&builtins);
                 self.push(".assert(");
                 self.rtv(txtrng, art.condition(), "condition for assert")?;
                 self.push("); return (");
@@ -226,7 +227,7 @@ impl Context<'_> {
                             self.push("))");
                         }
                         _ => {
-                            self.push(&format!("{}.nixop__{:?}", NIX_BUILTINS_RT, op));
+                            self.push(&format!("{}.nixop__{:?}", builtins, op));
                             self.push(&format!("({mklazy}(()=>", mklazy = NIX_MKLAZY));
                             self.rtv(txtrng, bo.lhs(), "lhs for binop")?;
                             self.push(&format!("),{mklazy}(()=>", mklazy = NIX_MKLAZY));
@@ -514,7 +515,7 @@ impl Context<'_> {
                 match uo.operator() {
                     Uok::Invert | Uok::Negate => {}
                 }
-                self.push(&format!("{}.nixuop__{:?}(", NIX_BUILTINS_RT, uo.operator()));
+                self.push(&format!("{}.nixuop__{:?}(", builtins, uo.operator()));
                 self.rtv(txtrng, uo.value(), "value for unary-op")?;
                 self.push(")");
             }
