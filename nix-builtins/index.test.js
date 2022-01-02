@@ -1,4 +1,4 @@
-import { Lazy, force, inScope, initRtDep } from "./index.js";
+import { Lazy, force, mkScope, initRtDep } from "./index.js";
 import isEqual from 'lodash-es';
 import assert from 'webassert';
 
@@ -64,6 +64,27 @@ describe('force', function() {
         let tmpo = { iL: true };
         let tmpo2 = { iL: true };
         assert_eq(force(tmpo), tmpo2, "tripped by iL");
+    });
+});
+
+describe('mkScope', function() {
+    it('should work standalone', function() {
+        let sc = mkScope();
+        assert_eq(sc("a", 1), undefined, "(1s)");
+        assert_eq(sc("a"), 1, "(1g)");
+        assert_eq(sc("b", 2), undefined, "(2s)");
+        assert_eq(sc("b"), 2, "(2g)");
+        assert_eq(sc("a"), 1, "(3g)");
+    });
+
+    it('should work recursively', function() {
+        let sc1 = mkScope();
+        let sc2 = mkScope(sc1);
+        assert_eq(sc1("a", 1), undefined, "(1)");
+        assert_eq(sc2("a"), 1, "(2)");
+        assert_eq(sc2("a", 2), undefined, "(3)");
+        assert_eq(sc1("a"), 1, "(4)");
+        assert_eq(sc2("a"), 2, "(5)");
     });
 });
 

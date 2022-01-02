@@ -64,8 +64,7 @@ dependencies = [
 [[package]]
 name = "rnix"
 version = "0.10.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "065c5eac8e8f7e7b0e7227bdc46e2d8dd7d69fff7a9a2734e21f686bbcb9b2c9"
+source = "git+https://github.com/zseri/rnix-parser?branch=fix-string-interpol#ef9db17ed4f9b2fe121488ba6afffc0a8c58268a"
 dependencies = [
  "cbitset",
  "rowan",
@@ -99,9 +98,9 @@ checksum = "73b4b750c782965c211b42f022f59af1fbceabdd026623714f104152f1ec149f"
 
 [[package]]
 name = "serde"
-version = "1.0.132"
+version = "1.0.133"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8b9875c23cf305cd1fd7eb77234cbb705f21ea6a72c637a5c6db5fe4b8e7f008"
+checksum = "97565067517b60e2d1ea8b268e59ce036de907ac523ad83a0475da04e818989a"
 
 [[package]]
 name = "serde_json"

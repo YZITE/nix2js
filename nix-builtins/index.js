@@ -41,19 +41,22 @@ export function delay(value) {
     }
 }
 
-export function inScope(orig, overlay) {
-    if (overlay === undefined) {
-        return orig;
-    } else {
-        return function(key, value) {
-            let v1 = overlay(key, value);
-            if (value !== undefined || v1 !== undefined) {
-                return v1;
-            } else {
-                return orig(key, undefined);
-            }
-        };
-    }
+export function mkScope(orig) {
+    // this is basically an interior mutable associative array.
+    let scref = {i:{}};
+    return function(key, value) {
+        if (key === undefined) {
+            return scref.i;
+        } else if (value !== undefined) {
+            scref.i[key] = value;
+        } else if (scref.i[key] !== undefined) {
+            return scref.i[key];
+        } else if (orig !== undefined) {
+            return orig(key, undefined);
+        } else {
+            throw ReferenceError('nix__' + key + ' is not defined');
+        }
+    };
 }
 
 export function orDefault(lazy_selop, lazy_dfl) {

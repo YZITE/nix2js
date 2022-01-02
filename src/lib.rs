@@ -21,9 +21,9 @@ const NIX_MKLAZY: &str = "nixBlti.mkLazy";
 const NIX_DELAY: &str = "nixBlti.delay";
 const NIX_FORCE: &str = "nixBlti.force";
 const NIX_OR_DEFAULT: &str = "nixBlti.orDefault";
-const NIXBLT_IN_SCOPE: &str = "nixBlti.inScope";
 const NIX_RUNTIME: &str = "nixRt";
 const NIX_IN_SCOPE: &str = "nixInScope";
+const NIX_IN_SCOPE_DEF: &str = "let nixInScope=nixBlti.mkScope(nixInScope);";
 const NIX_LAMBDA_ARG_PFX: &str = "nix__";
 const NIX_LAMBDA_BOUND: &str = "nixBound";
 
@@ -47,21 +47,6 @@ macro_rules! err {
     }};
 }
 
-macro_rules! rtv {
-    ($x:expr, $desc:expr) => {{
-        match $x {
-            None => {
-                err!(format!(
-                    "line {}: {} missing",
-                    self.txtrng_to_lineno(txtrng),
-                    $desc
-                ));
-            }
-            Some(x) => self.translate_node(x)?,
-        }
-    }};
-}
-
 impl Context<'_> {
     fn push(&mut self, x: &str) {
         *self.acc += x;
@@ -74,6 +59,24 @@ impl Context<'_> {
             .take_while(|(idx, _)| *idx <= bytepos)
             .filter(|(_, c)| *c == '\n')
             .count()
+    }
+
+    fn rtv(
+        &mut self,
+        txtrng: rnix::TextRange,
+        x: Option<NixNode>,
+        desc: &str,
+    ) -> Result<(), Vec<String>> {
+        match x {
+            None => {
+                err!(format!(
+                    "line {}: {} missing",
+                    self.txtrng_to_lineno(txtrng),
+                    desc
+                ));
+            }
+            Some(x) => self.translate_node(x),
+        }
     }
 
     fn translate_varname(&self, vn: &str, txtrng: rnix::TextRange) -> String {
@@ -104,14 +107,34 @@ impl Context<'_> {
         self.translate_varname(id.as_str(), id.node().text_range())
     }
 
-    fn use_or(&mut self, x: Option<NixNode>, alt: &str) -> Result<(), Vec<String>> {
-        match x {
-            None => {
-                *self.acc += alt;
-                Ok(())
+    fn translate_node_kv(&mut self, i: KeyValue, scope: &str) -> Result<(), Vec<String>> {
+        let txtrng = i.node().text_range();
+        let kp: Vec<_> = if let Some(key) = i.key() {
+            key.path().collect()
+        } else {
+            err!(format!(
+                "line {}: key for key-value pair missing",
+                self.txtrng_to_lineno(txtrng)
+            ));
+        };
+
+        if let [name] = &kp[..] {
+            if let Some(name) = Ident::cast(name.clone()) {
+                self.push(&format!(
+                    "{}({},{}(()=>(",
+                    scope,
+                    self.translate_ident(&name),
+                    NIX_MKLAZY
+                ));
+                self.rtv(txtrng, i.value(), "value for key-value pair")?;
+                self.push(")));");
+            } else {
+                unimplemented!("unsupported key-value pair: {:?}", kp);
             }
-            Some(x) => self.translate_node(x),
+        } else {
+            unimplemented!("unsupported key-value pair: {:?}", kp);
         }
+        Ok(())
     }
 
     fn translate_let<EH: EntryHolder>(
@@ -119,7 +142,16 @@ impl Context<'_> {
         node: &EH,
         body: NixNode,
     ) -> Result<(), Vec<String>> {
-        unimplemented!()
+        self.push(&format!("((){{{}", NIX_IN_SCOPE_DEF));
+        for i in node.entries() {
+            self.translate_node_kv(i, NIX_IN_SCOPE)?;
+        }
+        for i in node.inherits() {
+            self.translate_node(i.node().clone())?;
+        }
+        self.translate_node(body)?;
+        self.push(")()");
+        Ok(())
     }
 
     fn translate_node(&mut self, node: NixNode) -> Result<(), Vec<String>> {
@@ -144,9 +176,9 @@ impl Context<'_> {
         match x {
             Pt::Apply(app) => {
                 self.push("(");
-                rtv!(app.lambda(), "lambda for application");
+                self.rtv(txtrng, app.lambda(), "lambda for application")?;
                 self.push(")(");
-                rtv!(app.value(), "value for application");
+                self.rtv(txtrng, app.value(), "value for application")?;
                 self.push(")");
             }
 
@@ -154,9 +186,9 @@ impl Context<'_> {
                 self.push("(function() { ");
                 self.push(NIX_BUILTINS_RT);
                 self.push(".assert(");
-                rtv!(art.condition(), "condition for assert");
+                self.rtv(txtrng, art.condition(), "condition for assert")?;
                 self.push("); return (");
-                rtv!(art.body(), "body for assert");
+                self.rtv(txtrng, art.body(), "body for assert")?;
                 self.push("); })()");
             }
 
@@ -168,7 +200,7 @@ impl Context<'_> {
                     match op {
                         Bok::IsSet => {
                             self.push(&format!("new {lazy}(()=>(", lazy = NIX_LAZY));
-                            rtv!(bo.lhs(), "lhs for binop ?");
+                            self.rtv(txtrng, bo.lhs(), "lhs for binop ?")?;
                             self.push(").hasOwnProperty(");
                             if let Some(x) = bo.rhs() {
                                 if let Some(y) = Ident::cast(x.clone()) {
@@ -189,9 +221,9 @@ impl Context<'_> {
                         _ => {
                             self.push(&format!("{}.nixop__{:?}", NIX_BUILTINS_RT, op));
                             self.push(&format!("({mklazy}(()=>", mklazy = NIX_MKLAZY));
-                            rtv!(bo.lhs(), "lhs for binop");
+                            self.rtv(txtrng, bo.lhs(), "lhs for binop")?;
                             self.push(&format!("),{mklazy}(()=>", mklazy = NIX_MKLAZY));
-                            rtv!(bo.rhs(), "lhs for binop");
+                            self.rtv(txtrng, bo.rhs(), "lhs for binop")?;
                             self.push("))");
                         }
                     }
@@ -207,7 +239,7 @@ impl Context<'_> {
                 // dynamic key component
                 self.push(NIX_FORCE);
                 self.push("(");
-                rtv!(d.inner(), "inner for dynamic (key)");
+                self.rtv(txtrng, d.inner(), "inner for dynamic (key)")?;
                 self.push(")");
             }
 
@@ -222,11 +254,11 @@ impl Context<'_> {
                 self.push("(function() { let nixRet = undefined; if(");
                 self.push(NIX_FORCE);
                 self.push("(");
-                rtv!(ie.condition(), "condition for if-else");
+                self.rtv(txtrng, ie.condition(), "condition for if-else")?;
                 self.push(")) { nixRet = ");
-                rtv!(ie.body(), "if-body for if-else");
+                self.rtv(txtrng, ie.body(), "if-body for if-else")?;
                 self.push("; } else { nixRet = ");
-                rtv!(ie.else_body(), "else-body for if-else");
+                self.rtv(txtrng, ie.else_body(), "else-body for if-else")?;
                 self.push("; }})");
             }
 
@@ -241,7 +273,7 @@ impl Context<'_> {
 
                 if let Some(inhf) = inh.from() {
                     self.push("(function(){ let nixInhR = ");
-                    rtv!(inhf.inner(), "inner for inherit-from");
+                    self.rtv(txtrng, inhf.inner(), "inner for inherit-from")?;
                     self.push(";");
                     for id in inh.idents() {
                         let idesc = escape_str(id.as_str());
@@ -268,7 +300,7 @@ impl Context<'_> {
                 }
             }
 
-            Pt::InheritFrom(inhf) => rtv!(inhf.inner(), "inner for inherit-from"),
+            Pt::InheritFrom(inhf) => self.rtv(txtrng, inhf.inner(), "inner for inherit-from")?,
 
             Pt::Key(key) => {
                 let mut fi = true;
@@ -343,7 +375,7 @@ impl Context<'_> {
                         err!(format!("lambda ({:?}) with invalid argument", lam));
                     }
 
-                    rtv!(lam.body(), "body for lambda");
+                    self.rtv(txtrng, lam.body(), "body for lambda")?;
                     assert!(self.vars.len() >= cur_lamstk);
                     self.vars.truncate(cur_lamstk);
                     self.push("})");
@@ -409,16 +441,17 @@ impl Context<'_> {
                     ordfl = NIX_OR_DEFAULT,
                     mklazy = NIX_MKLAZY,
                 ));
-                rtv!(
+                self.rtv(
+                    txtrng,
                     od.index().map(|i| i.node().clone()),
-                    "or-default without indexing operation"
-                );
+                    "or-default without indexing operation",
+                )?;
                 self.push(&format!(")),{delay}(", delay = NIX_DELAY));
-                rtv!(od.default(), "or-default without default");
+                self.rtv(txtrng, od.default(), "or-default without default")?;
                 self.push("))");
             }
 
-            Pt::Paren(p) => rtv!(p.inner(), "inner for paren"),
+            Pt::Paren(p) => self.rtv(txtrng, p.inner(), "inner for paren")?,
             Pt::PathWithInterpol(p) => {
                 unreachable!("standalone path-with-interpolation not supported: {:?}", p)
             }
@@ -426,11 +459,11 @@ impl Context<'_> {
             Pt::PatBind(p) => unreachable!("standalone pattern @ bind not supported: {:?}", p),
             Pt::PatEntry(p) => unreachable!("standalone pattern entry not supported: {:?}", p),
 
-            Pt::Root(r) => rtv!(r.inner(), "inner for root"),
+            Pt::Root(r) => self.rtv(txtrng, r.inner(), "inner for root")?,
 
             Pt::Select(sel) => {
                 self.push("(");
-                rtv!(sel.set(), "set for select");
+                self.rtv(txtrng, sel.set(), "set for select")?;
                 self.push(")[");
                 if let Some(idx) = sel.index() {
                     if let Some(val) = Ident::cast(idx.clone()) {
@@ -446,7 +479,30 @@ impl Context<'_> {
                 self.push("]");
             }
 
-            Pt::Str(s) => unreachable!("standalone string not supported: {:?}", s),
+            Pt::Str(s) => {
+                self.push("(");
+                let mut fi = true;
+                for i in s.parts() {
+                    if fi {
+                        fi = false;
+                    } else {
+                        self.push("+");
+                    }
+                    use rnix::value::StrPart as Sp;
+                    match i {
+                        Sp::Literal(lit) => self.push(&escape_str(&lit)),
+                        Sp::Ast(ast) => {
+                            self.push("(");
+                            let txtrng = ast.node().text_range();
+                            self.rtv(txtrng, ast.inner(), "inner for str-interpolate")?;
+                            self.push(")");
+                        },
+                    }
+                }
+                self.push(")");
+            },
+
+            Pt::StrInterpol(si) => self.rtv(txtrng, si.inner(), "inner for str-interpolate")?,
 
             Pt::UnaryOp(uo) => {
                 use UnaryOpKind as Uok;
@@ -454,7 +510,7 @@ impl Context<'_> {
                     Uok::Invert | Uok::Negate => {}
                 }
                 self.push(&format!("{}.nixuop__{:?}(", NIX_BUILTINS_RT, uo.operator()));
-                rtv!(uo.value(), "value for unary-op");
+                self.rtv(txtrng, uo.value(), "value for unary-op")?;
                 self.push(")");
             }
 
@@ -504,11 +560,11 @@ pub fn translate(s: &str) -> Result<String, Vec<String>> {
     }
 
     let mut ret = String::new();
-    ret += "(function(nixRt,nixBlti) { ";
+    ret += "(function(nixRt,nixBlti){";
     ret += NIX_BUILTINS_RT;
-    ret += " = nixBlti.initRtDep(nixRt); let ";
+    ret += "=nixBlti.initRtDep(nixRt);let ";
     ret += NIX_IN_SCOPE;
-    ret += " = function(key, value) { console.error(\"illegal nixInScope call with key=\", key, \" value=\", value); };\n";
+    ret += "=undefined;\n";
     Context {
         inp: s,
         acc: &mut ret,
