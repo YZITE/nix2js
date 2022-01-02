@@ -1,5 +1,5 @@
 import { Lazy, force, mkScope, initRtDep } from "./index.js";
-import isEqual from 'lodash-es';
+import { isEqual } from 'lodash-es';
 import assert from 'webassert';
 
 function mkMut(i) { return { i: i }; }
@@ -40,6 +40,24 @@ describe('Lazy', function() {
         });
         assert_eq(lobj.map(x => x + 1).evaluate(), 2, "indirect");
         assert_eq(lobj.evaluate(), 1, "secondary direct");
+    });
+
+    it('automatic dereference should work', function() {
+        let ref = mkMut(0);
+        let lobj = new Lazy(function() {
+            ref.i += 1;
+            return {
+                a: 1,
+                b: 2,
+            };
+        });
+        assert_eq(ref.i, 0, "(0)");
+        assert_eq(lobj['a'], 1, "(1)");
+        assert_eq(ref.i, 1, "(1i)");
+        assert_eq(lobj['b'], 2, "(2)");
+        assert_eq(ref.i, 1, "(2i)");
+        assert_eq(lobj['c'], undefined, "(3)");
+        assert_eq(ref.i, 1, "(3i)");
     });
 });
 
@@ -102,7 +120,7 @@ describe('add', function() {
                 assert(false, "unreachable");
             } catch(e) {
                 assert(e instanceof XpError, "error kind");
-                assert_eq(e.message, "builtins.add", "message");
+                assert_eq(e.message, "builtins.add: invalid input type (string), expected (number)", "message");
             }
         });
         it("int/string", function() {
@@ -164,16 +182,16 @@ it('-', function() {
     let blti = instrum_blti;
     assert_eq(blti.nixop__Sub(1200, 567), 633, "integer");
     assert_eq(blti.nixop__Sub(-100, 567), -667, "integer (2)");
-    assert_eq(blti.nixop__Add(203, -500), 703, "integer (3)");
+    assert_eq(blti.nixop__Sub(203, -500), 703, "integer (3)");
 });
 
 it('*', function() {
     let blti = instrum_blti;
     assert_eq(blti.nixop__Mul(50, 46), 2300, "integer");
     assert_eq(blti.nixop__Mul(50004, 1023), 51154092, "integer (2)");
-    assert_eq(blti.nixop__Add(203, -500), -101500, "integer (3)");
-    assert_eq(blti.nixop__Add(-203, 500), -101500, "integer (4)");
-    assert_eq(blti.nixop__Add(-203, -500), 101500, "integer (4)");
+    assert_eq(blti.nixop__Mul(203, -500), -101500, "integer (3)");
+    assert_eq(blti.nixop__Mul(-203, 500), -101500, "integer (4)");
+    assert_eq(blti.nixop__Mul(-203, -500), 101500, "integer (5)");
 });
 
 describe('/', function() {
@@ -207,4 +225,12 @@ describe('//', function() {
         assert_eq(blti.nixop__Update(a, b), {a: {i: 2}}, "//");
         assert_eq(a, {a: {i: 0}}, "original objects shouldn't be modified");
     });
+});
+
+it('==', function() {
+    assert_eq(instrum_blti.nixop__Equal(1, 1), true);
+});
+
+it('!=', function() {
+    assert_eq(instrum_blti.nixop__NotEqual(1, 1), false);
 });

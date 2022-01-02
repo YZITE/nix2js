@@ -1,8 +1,18 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 
-import isEqual from 'lodash-es';
+import { isEqual } from 'lodash-es';
 
 export const API_VERSION = 0;
+
+const LazyHandler = {
+    get: function(target, prop, receiver) {
+        if (prop in target) {
+            return target[prop];
+        } else {
+            return target.evaluate()[prop];
+        }
+    }
+};
 
 export class Lazy {
     constructor(inner) {
@@ -12,6 +22,9 @@ export class Lazy {
         if (toi === 'object') {
             // automatic unfolding
             return inner;
+        } else {
+            // automatic [] unfolding
+            return new Proxy(this, LazyHandler);
         }
     }
     evaluate() {
@@ -197,7 +210,7 @@ export function initRtDep(nixRt) {
             if (!b) {
                 nixRt.throw(fmt_fname("/") + ": division by zero");
             }
-            return a * b;
+            return a / b;
         }),
         nixop__And: binop_helper("&&", function(a, b) {
             req_type("&&", a, "boolean");
