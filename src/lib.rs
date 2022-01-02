@@ -15,6 +15,7 @@
  It also expects a `nixBlti` object as the second argument, which should
  be the objects/namespace of all exported objects of the npm package `nix-builtins`.
 **/
+// SPDX-License-Identifier: LGPL-2.1-or-later
 use rnix::{types::*, SyntaxNode as NixNode};
 
 mod postracker;

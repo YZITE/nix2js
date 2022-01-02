@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
+
 import isEqual from 'lodash-es';
 
 export const API_VERSION = 0;

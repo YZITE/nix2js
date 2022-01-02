@@ -1,4 +1,5 @@
 /// utility for source-map generation
+// SPDX-License-Identifier: LGPL-2.1-or-later
 
 #[derive(Clone, Copy, Default)]
 pub(crate) struct PosTracker {
