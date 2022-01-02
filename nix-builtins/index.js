@@ -51,7 +51,24 @@ export function mkScope(orig) {
         } else if (orig !== undefined) {
             return orig(key, undefined);
         } else {
-            throw ReferenceError('nix__' + key + ' is not defined');
+            throw ReferenceError('dynscoped nix__' + key + ' is not defined');
+        }
+    };
+}
+
+export function mkScopeWith(orig, withns_) {
+    return function(key, value) {
+        let withns = force(withns_);
+        if (key === undefined) {
+            return Object.assign({}, withns);
+        } else if (value !== undefined) {
+            throw ReferenceError('withscoped nix__' + key + ' is read-only');
+        } else if (withns[key] !== undefined) {
+            return withns[key];
+        } else if (orig !== undefined) {
+            return orig(key, undefined);
+        } else {
+            throw ReferenceError('withscoped nix__' + key + ' is not defined');
         }
     };
 }

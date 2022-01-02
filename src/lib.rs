@@ -546,7 +546,7 @@ impl Context<'_> {
                     od.index().map(|i| i.node().clone()),
                     "or-default without indexing operation",
                 )?;
-                self.push(&format!(")),"));
+                self.push(")),");
                 self.rtv(txtrng, od.default(), "or-default without default")?;
                 self.push(")");
             }
@@ -642,7 +642,13 @@ impl Context<'_> {
                 )),
             },
 
-            Pt::With(_) => unimplemented!(),
+            Pt::With(with) => {
+                self.push(&format!("({}=>(", NIX_IN_SCOPE));
+                self.rtv(txtrng, with.body(), "body for 'with' scope")?;
+                self.push("))(nixBlti.mkScopeWith(nixInScope,");
+                self.rtv(txtrng, with.namespace(), "namespace for 'with' scope")?;
+                self.push("))");
+            }
         }
 
         Ok(())
