@@ -1,7 +1,8 @@
+*.js.map
+*.min.js
+node_modules
 pkg
 result
 result-*
 target
-node_modules
-*.min.js
-*.js.map
+*.tgz
