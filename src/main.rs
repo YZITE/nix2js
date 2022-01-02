@@ -33,7 +33,7 @@ fn main() -> io::Result<()> {
                 if let Some(outpf) = args.get(0) {
                     if let Some(mapf) = args.get(1) {
                         std::fs::write(&mapf, map.as_bytes())?;
-                        js += "\n# sourceMappingURL=";
+                        js += "\n//# sourceMappingURL=";
                         js += mapf;
                     }
                     let _ = map;
