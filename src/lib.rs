@@ -23,7 +23,6 @@ use postracker::PosTracker;
 const NIX_BUILTINS_RT: &str = "nixBltiRT";
 const NIX_LAZY: &str = "nixBlti.Lazy";
 const NIX_MKLAZY: &str = "nixBlti.mkLazy";
-const NIX_DELAY: &str = "nixBlti.delay";
 const NIX_FORCE: &str = "nixBlti.force";
 const NIX_OR_DEFAULT: &str = "nixBlti.orDefault";
 const NIX_RUNTIME: &str = "nixRt";
@@ -547,9 +546,9 @@ impl Context<'_> {
                     od.index().map(|i| i.node().clone()),
                     "or-default without indexing operation",
                 )?;
-                self.push(&format!(")),{delay}(", delay = NIX_DELAY));
+                self.push(&format!(")),"));
                 self.rtv(txtrng, od.default(), "or-default without default")?;
-                self.push("))");
+                self.push(")");
             }
 
             Pt::Paren(p) => self.rtv(txtrng, p.inner(), "inner for paren")?,

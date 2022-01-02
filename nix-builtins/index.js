@@ -5,7 +5,12 @@ export const API_VERSION = 0;
 export class Lazy {
     constructor(inner) {
         this.i = inner;
-        this.iL = typeof inner === "function";
+        let toi = typeof inner;
+        this.iL = toi === "function";
+        if (toi === 'object') {
+            // automatic unfolding
+            return inner;
+        }
     }
     evaluate() {
         if (this.iL) {
@@ -31,14 +36,6 @@ export function force(value) {
 // this ensures correct evaluation when evaluating lazy values
 export function mkLazy(maker) {
     return new Lazy(()=>force(maker()));
-}
-
-export function delay(value) {
-    if (!(value instanceof Lazy)) {
-        return new Lazy(()=>value);
-    } else {
-        return value;
-    }
 }
 
 export function mkScope(orig) {
