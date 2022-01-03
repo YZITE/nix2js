@@ -38,3 +38,5 @@ let x = eval(fs.readFileSync('path/to/file.js')+'')(nixRt, nixBlti);
 
 - improve and verify the laziness properties of this
 - nested attrset keys and non-recursive attrsets are implemented suboptimally
+- implement all the nix builtins
+  - `derivation` should create an object with a `realise` method

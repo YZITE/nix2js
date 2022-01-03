@@ -6,7 +6,7 @@
     should automatically supply the correct file name
     (triggered by `assert` and `throw` if hit)
  - `abort(message)`: like `throw`, but triggered by `abort` if hit
- - `derive(derivation_attrset)`: should realise a derivation
+ - `realise(derivation_attrset)`: should realise a derivation
     (used e.g. for import-from-derivation, also gets linked onto derivations)
  - `export(anchor,path)`: export a path into the nix store
  - `import(to_be_imported_path)`: import a nix file,
@@ -45,6 +45,12 @@ struct Context<'a> {
     // tracking positions for offset calc
     lp_src: PosTracker,
     lp_dst: PosTracker,
+}
+
+fn attrelem_raw_safe(s: &str) -> bool {
+    !s.is_empty()
+        && s.chars().next().unwrap().is_ascii_alphabetic()
+        && !s.contains(|i: char| !i.is_ascii_alphanumeric())
 }
 
 fn escape_str(s: &str) -> String {
@@ -151,7 +157,7 @@ impl Context<'_> {
             "builtins" => NIX_BUILTINS_RT.to_string(),
             "derivation" => {
                 // aliased name for derivation builtin
-                format!("{}.derivation", NIX_BUILTINS_RT,)
+                format!("{}.derivation", NIX_BUILTINS_RT)
             }
             "abort" | "import" | "throw" => {
                 format!("{}.{}", NIX_RUNTIME, vn)
@@ -162,6 +168,7 @@ impl Context<'_> {
                     // TODO: improve this
                     Sv::LambdaArg => format!("{}{}", NIX_LAMBDA_ARG_PFX, vn.replace("-", "___")),
                 },
+                None if attrelem_raw_safe(vn) => format!("{}.{}", NIX_IN_SCOPE, vn),
                 None => format!("{}[{}]", NIX_IN_SCOPE, escape_str(vn)),
             },
         }
@@ -178,6 +185,21 @@ impl Context<'_> {
         ret
     }
 
+    fn translate_node_ident_indexing(&mut self, id: &Ident) -> String {
+        let txtrng = id.node().text_range();
+        // if we don't make this conditional, we would record
+        // scrambled identifiers otherwise...
+        let is_ident = self.snapshot_pos(txtrng.start(), false).is_some();
+        let ret = if attrelem_raw_safe(id.as_str()) {
+            format!(".{}", id.as_str())
+        } else {
+            format!("[{}]", escape_str(&id.as_str()))
+        };
+        self.push(&ret);
+        self.snapshot_pos(txtrng.end(), is_ident);
+        ret
+    }
+
     fn translate_node_ident(&mut self, id: &Ident) -> String {
         let txtrng = id.node().text_range();
         // if we don't make this conditional, we would record
@@ -189,7 +211,7 @@ impl Context<'_> {
         ret
     }
 
-    fn translate_node_key_element(&mut self, node: &NixNode) -> TranslateResult {
+    fn translate_node_key_element_force_str(&mut self, node: &NixNode) -> TranslateResult {
         if let Some(name) = Ident::cast(node.clone()) {
             let txtrng = name.node().text_range();
             let is_ident = self.snapshot_pos(txtrng.start(), false).is_some();
@@ -197,6 +219,17 @@ impl Context<'_> {
             self.snapshot_pos(txtrng.end(), is_ident);
         } else {
             self.translate_node(node.clone(), false)?;
+        }
+        Ok(())
+    }
+
+    fn translate_node_key_element_indexing(&mut self, node: &NixNode) -> TranslateResult {
+        if let Some(name) = Ident::cast(node.clone()) {
+            self.translate_node_ident_indexing(&name);
+        } else {
+            self.push("[");
+            self.translate_node(node.clone(), false)?;
+            self.push("]");
         }
         Ok(())
     }
@@ -232,9 +265,9 @@ impl Context<'_> {
         };
 
         if kpr.is_empty() {
-            self.push(&format!("{}[", scope));
-            self.translate_node_key_element(&kpfi)?;
-            self.push("]=");
+            self.push(&format!("{}", scope));
+            self.translate_node_key_element_indexing(&kpfi)?;
+            self.push("=");
             self.translate_node(value, true)?;
             self.push(";");
         } else {
@@ -242,19 +275,19 @@ impl Context<'_> {
                 "if(!Object.prototype.hasOwnProperty.call({},",
                 scope
             ));
-            self.translate_node_key_element(&kpfi)?;
-            self.push(&format!(")){{{}[", scope)); /* } */
-            self.translate_node_key_element(&kpfi)?;
-            self.push("]=Object.create(null);}");
-            self.push(&format!("{}._deepMerge({}[", NIX_OPERATORS, scope));
+            self.translate_node_key_element_force_str(&kpfi)?;
+            self.push(&format!(")){{{}", scope)); /* } */
+            self.translate_node_key_element_indexing(&kpfi)?;
+            self.push("=Object.create(null);}");
+            self.push(&format!("{}._deepMerge({}", NIX_OPERATORS, scope));
             // this is a bit cheating because we directly override
             // parts of the attrset instead of round-tripping thru $`scope`.
-            self.translate_node_key_element(&kpfi)?;
-            self.push("],");
+            self.translate_node_key_element_indexing(&kpfi)?;
+            self.push(",");
             self.translate_node(value, true)?;
             for i in kpr {
                 self.push(",");
-                self.translate_node_key_element(&i)?;
+                self.translate_node_key_element_force_str(&i)?;
             }
             self.push(");");
         }
@@ -267,18 +300,17 @@ impl Context<'_> {
             if idents.len() == 1 {
                 let id = idents.remove(0);
                 self.push(scope);
-                self.push("[");
-                self.translate_node_ident_escape_str(&id);
-                self.push(&format!("]=new {}(()=>(", NIX_LAZY));
+                self.translate_node_ident_indexing(&id);
+                self.push(&format!("=new {}(()=>(", NIX_LAZY));
                 self.rtv(
                     inhf.node().text_range(),
                     inhf.inner(),
                     false,
                     "inner for inherit-from",
                 )?;
-                self.push(")[");
-                self.translate_node_ident_escape_str(&id);
-                self.push("]);");
+                self.push(")");
+                self.translate_node_ident_indexing(&id);
+                self.push(");");
             } else {
                 self.push("(function(){let nixInhR=");
                 self.push(NIX_FORCE);
@@ -292,22 +324,20 @@ impl Context<'_> {
                 self.push(");");
                 for id in idents {
                     self.push(scope);
-                    self.push("[");
-                    self.translate_node_ident_escape_str(&id);
-                    self.push("]=new ");
+                    self.translate_node_ident_indexing(&id);
+                    self.push("=new ");
                     self.push(NIX_LAZY);
-                    self.push("(()=>nixInhR[");
-                    self.translate_node_ident_escape_str(&id);
-                    self.push("]);");
+                    self.push("(()=>nixInhR");
+                    self.translate_node_ident_indexing(&id);
+                    self.push(");");
                 }
                 self.push("})();");
             }
         } else {
             for id in inh.idents() {
                 self.push(scope);
-                self.push("[");
-                self.translate_node_ident_escape_str(&id);
-                self.push("]=");
+                self.translate_node_ident_indexing(&id);
+                self.push("=");
                 self.translate_node_ident(&id);
                 self.push(";");
             }
@@ -535,9 +565,7 @@ impl Context<'_> {
                                     self.push("(");
                                     let push_argzas = |this: &mut Context<'_>| {
                                         this.push(&argname);
-                                        this.push("[");
-                                        this.translate_node_ident_escape_str(&z);
-                                        this.push("]");
+                                        this.translate_node_ident_indexing(&z);
                                     };
                                     push_argzas(self);
                                     self.push(" !==undefined)?(");
@@ -658,17 +686,12 @@ impl Context<'_> {
                 }
                 self.push("(");
                 self.rtv(txtrng, sel.set(), false, "set for select")?;
-                self.push(")[");
+                self.push(")");
                 if let Some(idx) = sel.index() {
-                    if let Some(val) = Ident::cast(idx.clone()) {
-                        self.push(&escape_str(val.as_str()));
-                    } else {
-                        self.translate_node(idx, false)?;
-                    }
+                    self.translate_node_key_element_indexing(&idx)?;
                 } else {
                     err!(format!("{:?}: {} missing", txtrng, "index for select"));
                 }
-                self.push("]");
                 if insert_lazy {
                     self.push(")");
                 }
