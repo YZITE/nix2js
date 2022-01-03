@@ -232,9 +232,12 @@ impl Context<'_> {
             self.translate_node(value, true)?;
             self.push(";");
         } else {
-            self.push("if(!(");
+            self.push(&format!(
+                "if(!Object.prototype.hasOwnProperty.call({},",
+                scope
+            ));
             self.translate_node_key_element(&kpfi)?;
-            self.push(&format!(" in {})){{{}[", scope, scope)); /* } */
+            self.push(&format!(")){{{}[", scope)); /* } */
             self.translate_node_key_element(&kpfi)?;
             self.push("]=Object.create(null);}");
             self.push(&format!("{}._deepMerge({}[", NIX_BUILTINS_RT, scope));
@@ -392,9 +395,12 @@ impl Context<'_> {
                     use BinOpKind as Bok;
                     match op {
                         Bok::IsSet => {
-                            self.push(&format!("new {lazy}(()=>(", lazy = NIX_LAZY));
+                            self.push(&format!(
+                                "new {lazy}(()=>Object.prototype.hasOwnProperty.call(",
+                                lazy = NIX_LAZY
+                            ));
                             self.rtv(txtrng, bo.lhs(), "lhs for binop ?")?;
-                            self.push(").hasOwnProperty(");
+                            self.push(",");
                             if let Some(x) = bo.rhs() {
                                 if let Some(y) = Ident::cast(x.clone()) {
                                     self.translate_node_ident_escape_str(&y);
