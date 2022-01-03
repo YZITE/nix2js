@@ -254,26 +254,43 @@ impl Context<'_> {
 
     fn translate_node_inherit(&mut self, inh: Inherit, scope: &str) -> TranslateResult {
         if let Some(inhf) = inh.from() {
-            self.push("(function(){let nixInhR=");
-            self.push(NIX_FORCE);
-            self.push("(");
-            self.rtv(
-                inhf.node().text_range(),
-                inhf.inner(),
-                "inner for inherit-from",
-            )?;
-            self.push(");");
-            for id in inh.idents() {
+            let mut idents: Vec<_> = inh.idents().collect();
+            if idents.len() == 1 {
+                let id = idents.remove(0);
                 self.push(scope);
                 self.push("[");
                 self.translate_node_ident_escape_str(&id);
-                self.push("]=new ");
-                self.push(NIX_LAZY);
-                self.push("(()=>nixInhR[");
+                self.push(&format!("]=new {}(()=>(", NIX_LAZY));
+                self.rtv(
+                    inhf.node().text_range(),
+                    inhf.inner(),
+                    "inner for inherit-from",
+                )?;
+                self.push(")[");
                 self.translate_node_ident_escape_str(&id);
                 self.push("]);");
+            } else {
+                self.push("(function(){let nixInhR=");
+                self.push(NIX_FORCE);
+                self.push("(");
+                self.rtv(
+                    inhf.node().text_range(),
+                    inhf.inner(),
+                    "inner for inherit-from",
+                )?;
+                self.push(");");
+                for id in idents {
+                    self.push(scope);
+                    self.push("[");
+                    self.translate_node_ident_escape_str(&id);
+                    self.push("]=new ");
+                    self.push(NIX_LAZY);
+                    self.push("(()=>nixInhR[");
+                    self.translate_node_ident_escape_str(&id);
+                    self.push("]);");
+                }
+                self.push("})();");
             }
-            self.push("})();");
         } else {
             for id in inh.idents() {
                 self.push(scope);
