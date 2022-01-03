@@ -150,14 +150,14 @@ describe('mkScopeWith', function() {
 
 describe('add', function() {
     it('should work if arguments are correct', function() {
-        let blti = instrum_blti;
+        let blti = instrum_blti[0];
         assert_eq(blti.add(1200)(567), 1767, "integer");
         assert_eq(blti.add(-100)(567), 467, "integer (2)");
         assert_eq(blti.add(203)(-500), -297, "integer (3)");
     });
     describe('should report errors correctly', function() {
         it("string/string", function() {
-            let blti = instrum_blti;
+            let blti = instrum_blti[0];
             try {
                 console.log(blti.add("ab")("cde"));
                 assert(false, "unreachable");
@@ -167,7 +167,7 @@ describe('add', function() {
             }
         });
         it("int/string", function() {
-            let blti = instrum_blti;
+            let blti = instrum_blti[0];
             try {
                 console.log(blti.add(0)("oops"));
                 assert(false, "unreachable");
@@ -177,7 +177,7 @@ describe('add', function() {
             }
         });
         it("string/int", function() {
-            let blti = instrum_blti;
+            let blti = instrum_blti[0];
             try {
                 console.log(blti.add("oops")(0));
                 assert(false, "unreachable");
@@ -191,17 +191,17 @@ describe('add', function() {
 
 describe('+', function() {
     it('should work if arguments are correct', function() {
-        let blti = instrum_blti;
-        assert_eq(blti.nixop__Add(1200, 567), 1767, "integer");
-        assert_eq(blti.nixop__Add(-100, 567), 467, "integer (2)");
-        assert_eq(blti.nixop__Add(203, -500), -297, "integer (3)");
-        assert_eq(blti.nixop__Add("ab", "cde"), "abcde", "string");
+        let blti = instrum_blti[1];
+        assert_eq(blti.Add(1200, 567), 1767, "integer");
+        assert_eq(blti.Add(-100, 567), 467, "integer (2)");
+        assert_eq(blti.Add(203, -500), -297, "integer (3)");
+        assert_eq(blti.Add("ab", "cde"), "abcde", "string");
     });
     describe('should report errors correctly', function() {
         it("int/string", function() {
-            let blti = instrum_blti;
+            let blti = instrum_blti[1];
             try {
-                console.log(blti.nixop__Add(0, "oops"));
+                console.log(blti.Add(0, "oops"));
                 assert(false, "unreachable");
             } catch(e) {
                 assert(e instanceof XpError, "error kind");
@@ -209,9 +209,9 @@ describe('+', function() {
             }
         });
         it("string/int", function() {
-            let blti = instrum_blti;
+            let blti = instrum_blti[1];
             try {
-                console.log(blti.nixop__Add("oops", 0));
+                console.log(blti.Add("oops", 0));
                 assert(false, "unreachable");
             } catch(e) {
                 assert(e instanceof XpError, "error kind");
@@ -222,32 +222,32 @@ describe('+', function() {
 });
 
 it('-', function() {
-    let blti = instrum_blti;
-    assert_eq(blti.nixop__Sub(1200, 567), 633, "integer");
-    assert_eq(blti.nixop__Sub(-100, 567), -667, "integer (2)");
-    assert_eq(blti.nixop__Sub(203, -500), 703, "integer (3)");
+    let blti = instrum_blti[1];
+    assert_eq(blti.Sub(1200, 567), 633, "integer");
+    assert_eq(blti.Sub(-100, 567), -667, "integer (2)");
+    assert_eq(blti.Sub(203, -500), 703, "integer (3)");
 });
 
 it('*', function() {
-    let blti = instrum_blti;
-    assert_eq(blti.nixop__Mul(50, 46), 2300, "integer");
-    assert_eq(blti.nixop__Mul(50004, 1023), 51154092, "integer (2)");
-    assert_eq(blti.nixop__Mul(203, -500), -101500, "integer (3)");
-    assert_eq(blti.nixop__Mul(-203, 500), -101500, "integer (4)");
-    assert_eq(blti.nixop__Mul(-203, -500), 101500, "integer (5)");
+    let blti = instrum_blti[1];
+    assert_eq(blti.Mul(50, 46), 2300, "integer");
+    assert_eq(blti.Mul(50004, 1023), 51154092, "integer (2)");
+    assert_eq(blti.Mul(203, -500), -101500, "integer (3)");
+    assert_eq(blti.Mul(-203, 500), -101500, "integer (4)");
+    assert_eq(blti.Mul(-203, -500), 101500, "integer (5)");
 });
 
 describe('/', function() {
     it('should work if arguments are correct', function() {
-        let blti = instrum_blti;
-        assert_eq(blti.nixop__Div(1, 1), 1, "integer");
-        assert_eq(blti.nixop__Div(8, 4), 2, "integer (2)");
-        assert_eq(blti.nixop__Div(754677, 1331), 567, "integer (3)");
+        let blti = instrum_blti[1];
+        assert_eq(blti.Div(1, 1), 1, "integer");
+        assert_eq(blti.Div(8, 4), 2, "integer (2)");
+        assert_eq(blti.Div(754677, 1331), 567, "integer (3)");
     });
     it('should catch division-by-zero', function() {
-        let blti = instrum_blti;
+        let blti = instrum_blti[1];
         try {
-            console.log(blti.nixop__Div(1, 0));
+            console.log(blti.Div(1, 0));
             assert(false, "unreachable");
         } catch(e) {
             assert(e instanceof XpError, "error kind");
@@ -258,22 +258,22 @@ describe('/', function() {
 
 describe('//', function() {
     it('should merge distinct attrsets correctly', function() {
-        let blti = instrum_blti;
-        assert_eq(blti.nixop__Update({a: 1}, {b:2}), {a:1, b:2});
+        let blti = instrum_blti[1];
+        assert_eq(blti.Update({a: 1}, {b:2}), {a:1, b:2});
     });
     it('should merge overlapping attrsets correctly', function() {
-        let blti = instrum_blti;
+        let blti = instrum_blti[1];
         let a = {a: {i: 0}};
         let b = {a: {i: 2}};
-        assert_eq(blti.nixop__Update(a, b), {a: {i: 2}}, "//");
+        assert_eq(blti.Update(a, b), {a: {i: 2}}, "//");
         assert_eq(a, {a: {i: 0}}, "original objects shouldn't be modified");
     });
 });
 
 it('==', function() {
-    assert_eq(instrum_blti.nixop__Equal(1, 1), true);
+    assert_eq(instrum_blti[1].Equal(1, 1), true);
 });
 
 it('!=', function() {
-    assert_eq(instrum_blti.nixop__NotEqual(1, 1), false);
+    assert_eq(instrum_blti[1].NotEqual(1, 1), false);
 });

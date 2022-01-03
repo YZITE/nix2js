@@ -22,6 +22,7 @@ mod postracker;
 use postracker::PosTracker;
 
 const NIX_BUILTINS_RT: &str = "nixBltiRT";
+const NIX_OPERATORS: &str = "nixOp";
 const NIX_EXTRACT_SCOPE: &str = "nixBlti.extractScope";
 const NIX_LAZY: &str = "nixBlti.Lazy";
 const NIX_FORCE: &str = "nixBlti.force";
@@ -245,7 +246,7 @@ impl Context<'_> {
             self.push(&format!(")){{{}[", scope)); /* } */
             self.translate_node_key_element(&kpfi)?;
             self.push("]=Object.create(null);}");
-            self.push(&format!("{}._deepMerge({}[", NIX_BUILTINS_RT, scope));
+            self.push(&format!("{}._deepMerge({}[", NIX_OPERATORS, scope));
             // this is a bit cheating because we directly override
             // parts of the attrset instead of round-tripping thru $`scope`.
             self.translate_node_key_element(&kpfi)?;
@@ -429,7 +430,7 @@ impl Context<'_> {
                             self.push("))");
                         }
                         _ => {
-                            self.push(&format!("{}.nixop__{:?}", NIX_BUILTINS_RT, op));
+                            self.push(&format!("{}.{:?}", NIX_OPERATORS, op));
                             self.push(&format!("(new {}(()=>", NIX_LAZY));
                             self.rtv(txtrng, bo.lhs(), false, "lhs for binop")?;
                             self.push(&format!("),new {}(()=>", NIX_LAZY));
@@ -547,7 +548,7 @@ impl Context<'_> {
                                 } else {
                                     self.push(&format!(
                                         "{}._lambdaA2chk({},",
-                                        NIX_BUILTINS_RT, argname,
+                                        NIX_OPERATORS, argname,
                                     ));
                                     self.translate_node_ident_escape_str(&z);
                                     self.push(")");
@@ -717,7 +718,7 @@ impl Context<'_> {
                 match uo.operator() {
                     Uok::Invert | Uok::Negate => {}
                 }
-                self.push(&format!("{}.nixuop__{:?}(", NIX_BUILTINS_RT, uo.operator()));
+                self.push(&format!("{}.u_{:?}(", NIX_OPERATORS, uo.operator()));
                 self.rtv(txtrng, uo.value(), false, "value for unary-op")?;
                 self.push(")");
             }
@@ -785,9 +786,11 @@ pub fn translate(s: &str, inp_name: &str) -> Result<(String, String), Vec<String
         Vec::new(),
         Vec::with_capacity((3 * s.len()) / 5),
     );
-    ret += "(function(nixRt,nixBlti){";
+    ret += "(function(nixRt,nixBlti){let[";
     ret += NIX_BUILTINS_RT;
-    ret += "=nixBlti.initRtDep(nixRt);let ";
+    ret.push(',');
+    ret += NIX_OPERATORS;
+    ret += "]=nixBlti.initRtDep(nixRt);let ";
     ret += NIX_IN_SCOPE;
     ret += "=nixBlti.mkScopeWith();return ";
     Context {

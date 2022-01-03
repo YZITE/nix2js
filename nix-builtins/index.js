@@ -181,7 +181,7 @@ export function initRtDep(nixRt) {
         }
     }
 
-    return {
+    return [{
         add: function(a) {
             return function(c) {
                 let b = force(a);
@@ -203,7 +203,11 @@ export function initRtDep(nixRt) {
             } else if (!cond2) {
                 nixRt.throw("assertion failed");
             }
-        },
+        }
+    },
+    {
+        u_Invert: a => !force(a),
+        u_Negate: a => -force(a),
         _deepMerge: function(attrs_, value, ...path) {
             let attrs = attrs_;
             while(1) {
@@ -234,80 +238,74 @@ export function initRtDep(nixRt) {
             }
             return attrs[key];
         },
-        nixop__Concat: binop_helper("operator ++", function(a, b) {
+        Concat: binop_helper("operator ++", function(a, b) {
             if (typeof a !== 'object') {
                 nixRt.throw("operator ++: invalid input type (" + typeof a + ")");
             }
             return a.concat(b);
         }),
-        // nixop__IsSet is implemented via .hasOwnProperty
-        nixop__Update: binop_helper("operator //", function(a, b) {
+        // IsSet is implemented via .hasOwnProperty
+        Update: binop_helper("operator //", function(a, b) {
             if (typeof a !== 'object') {
                 nixRt.throw("operator //: invalid input type (" + typeof a + ")");
             }
             return Object.assign({}, a, b);
         }),
-        nixop__Add: binop_helper("+", function(a, b) {
+        Add: binop_helper("+", function(a, b) {
             return a + b;
         }),
-        nixop__Sub: binop_helper("-", function(a, b) {
+        Sub: binop_helper("-", function(a, b) {
             req_type("-", a, "number");
             return a - b;
         }),
-        nixop__Mul: binop_helper("*", function(a, b) {
+        Mul: binop_helper("*", function(a, b) {
             req_type("*", a, "number");
             return a * b;
         }),
-        nixop__Div: binop_helper("/", function(a, b) {
+        Div: binop_helper("/", function(a, b) {
             req_type("/", a, "number");
             if (!b) {
                 nixRt.throw(fmt_fname("/") + ": division by zero");
             }
             return a / b;
         }),
-        nixop__And: binop_helper("&&", function(a, b) {
+        And: binop_helper("&&", function(a, b) {
             req_type("&&", a, "boolean");
             return a && b;
         }),
-        nixop__Implication: binop_helper("->", function(a, b) {
+        Implication: binop_helper("->", function(a, b) {
             req_type("->", a, "boolean");
             return (!a) || b;
         }),
-        nixop__Or: binop_helper("||", function(a, b) {
+        Or: binop_helper("||", function(a, b) {
             req_type("||", a, "boolean");
             return a || b;
         }),
-        nixop__Equal: function(a, c) {
+        Equal: function(a, c) {
             let b = force(a);
             let d = force(c);
             return isEqual(b, d);
         },
-        nixop__NotEqual: function(a, c) {
+        NotEqual: function(a, c) {
             let b = force(a);
             let d = force(c);
             return !isEqual(b, d);
         },
-        nixop__Less: binop_helper("<", function(a, b) {
+        Less: binop_helper("<", function(a, b) {
             req_type("<", a, "number");
             return a < b;
         }),
-        nixop__LessOrEq: binop_helper("<=", function(a, b) {
+        LessOrEq: binop_helper("<=", function(a, b) {
             req_type("<=", a, "number");
             return a <= b;
         }),
-        nixop__More: binop_helper(">", function(a, b) {
+        More: binop_helper(">", function(a, b) {
             req_type(">", a, "number");
             return a > b;
         }),
-        nixop__MoreOrEq: binop_helper(">=", function(a, b) {
+        MoreOrEq: binop_helper(">=", function(a, b) {
             req_type(">=", a, "number");
             return a >= b;
-        }),
-        nixuop__Invert: function(a) {
-            return !force(a);
-        },
-        nixuop__Negate: function(a) {
-            return -force(a);
-        }
-    };
+        })
+    }];
 }
