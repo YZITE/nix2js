@@ -20,7 +20,7 @@ The resulting code is then (if successful) present in `wasm/pkg`.
 
 ```sh
 npm i
-(cd nix-builtins && npm run prepare)
+npm -w nix-builtins run prepare
 node
 ```
 inside of the node REPL, type the following to setup some baseline env:
