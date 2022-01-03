@@ -459,31 +459,27 @@ impl Context<'_> {
                         self.push("){");
                         for i in y.entries() {
                             if let Some(z) = i.name() {
+                                self.push("let ");
                                 self.vars
                                     .push((z.as_str().to_string(), ScopedVar::LambdaArg));
-                                self.push("let ");
                                 self.translate_node_ident(&z);
-                                let argzas = if z.as_str().contains(|i: char| !i.is_alphanumeric())
-                                {
-                                    format!("{}[{}]", argname, escape_str(z.as_str()))
-                                } else {
-                                    format!("{}.{}", argname, z.as_str())
-                                };
+                                self.push("=");
                                 if let Some(zdfl) = i.default() {
                                     self.push(&format!(
-                                        "=({argzas} !==undefined)?({argzas}):(",
-                                        argzas = argzas,
+                                        "({argzas} !==undefined)?({argzas}):(",
+                                        argzas = format!("{}[{}]", argname, escape_str(z.as_str())),
                                     ));
                                     self.translate_node(zdfl, false)?;
-                                    self.push(");");
+                                    self.push(")");
                                 } else {
                                     self.push(&format!(
-                                        "={blti}._lambdaA2chk({zas},{argzas});",
-                                        zas = escape_str(z.as_str()),
-                                        argzas = argzas,
-                                        blti = NIX_BUILTINS_RT,
+                                        "{}._lambdaA2chk({},{})",
+                                        NIX_BUILTINS_RT,
+                                        argname,
+                                        escape_str(z.as_str()),
                                     ));
                                 }
+                                self.push(";");
                             } else {
                                 err!(format!("lambda pattern ({:?}) has entry without name", y));
                             }

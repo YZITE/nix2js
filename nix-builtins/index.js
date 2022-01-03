@@ -188,12 +188,12 @@ export function initRtDep(nixRt) {
                 }
             }
         },
-        _lambdaA2chk: function(key, value) {
-            if (value === undefined) {
+        _lambdaA2chk: function(attrs, key) {
+            if (attrs[key] === undefined) {
                 // TODO: adjust error message to what Nix currently issues.
                 nixRt.throw("attrset element " + key + "missing at lambda call");
             }
-            return value;
+            return attrs[key];
         },
         nixop__Concat: binop_helper("operator ++", function(a, b) {
             if (typeof a !== 'object') {
