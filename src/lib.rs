@@ -147,6 +147,7 @@ impl Context<'_> {
             "abort" | "import" | "throw" => {
                 format!("{}.{}", NIX_RUNTIME, vn)
             }
+            "false" | "true" | "null" => vn.to_string(),
             _ => match self.vars.iter().rev().find(|(ref i, _)| vn == i) {
                 Some((_, x)) => match x {
                     // TODO: improve this
@@ -200,20 +201,29 @@ impl Context<'_> {
             ));
         };
 
+        let value = match i.value() {
+            None => {
+                err!(format!(
+                    "line {}: value for key-value pair missing",
+                    self.txtrng_to_lineno(txtrng),
+                ));
+            }
+            Some(x) => x,
+        };
+
         if kpr.is_empty() {
             self.push(&format!("{}(", scope));
             self.translate_node_key_element(kpfi)?;
-            self.push(&format!(",{}(()=>(", NIX_MKLAZY));
-            self.rtv(txtrng, i.value(), "value for key-value pair")?;
-            self.push(")));");
+            self.push(",");
+            self.translate_node(value)?;
+            self.push(");");
         } else {
             self.push(&format!("{}._deepMerge({}(", NIX_BUILTINS_RT, scope));
             // this is a bit cheating because we directly override
             // parts of the attrset instead of round-tripping thru $`scope`.
             self.translate_node_key_element(kpfi)?;
-            self.push(&format!("),{}(()=>(", NIX_MKLAZY));
-            self.rtv(txtrng, i.value(), "value for key-value pair")?;
-            self.push("))");
+            self.push("),");
+            self.translate_node(value)?;
             for i in kpr {
                 self.push(",");
                 self.translate_node_key_element(i)?;
@@ -303,11 +313,11 @@ impl Context<'_> {
 
         match x {
             Pt::Apply(app) => {
-                self.push("(");
+                self.push(&format!("{}(()=>(", NIX_MKLAZY));
                 self.rtv(txtrng, app.lambda(), "lambda for application")?;
                 self.push(")(");
                 self.rtv(txtrng, app.value(), "value for application")?;
-                self.push(")");
+                self.push("))");
             }
 
             Pt::Assert(art) => {
@@ -570,7 +580,7 @@ impl Context<'_> {
             Pt::Root(r) => self.rtv(txtrng, r.inner(), "inner for root")?,
 
             Pt::Select(sel) => {
-                self.push("(");
+                self.push(&format!("{}(()=>(", NIX_MKLAZY));
                 self.rtv(txtrng, sel.set(), "set for select")?;
                 self.push(")[");
                 if let Some(idx) = sel.index() {
@@ -582,30 +592,36 @@ impl Context<'_> {
                 } else {
                     err!(format!("{:?}: {} missing", txtrng, "index for selectr"));
                 }
-                self.push("]");
+                self.push("])");
             }
 
             Pt::Str(s) => {
-                self.push("(");
-                let mut fi = true;
-                for i in s.parts() {
-                    if fi {
-                        fi = false;
-                    } else {
-                        self.push("+");
-                    }
-                    use rnix::value::StrPart as Sp;
-                    match i {
-                        Sp::Literal(lit) => self.push(&escape_str(&lit)),
-                        Sp::Ast(ast) => {
-                            self.push("(");
-                            let txtrng = ast.node().text_range();
-                            self.rtv(txtrng, ast.inner(), "inner for str-interpolate")?;
-                            self.push(")");
+                use rnix::value::StrPart as Sp;
+                match s.parts()[..] {
+                    [Sp::Literal(ref lit)] => self.push(&escape_str(lit)),
+                    ref sxs => {
+                        self.push("(");
+                        let mut fi = true;
+                        for i in sxs {
+                            if fi {
+                                fi = false;
+                            } else {
+                                self.push("+");
+                            }
+
+                            match i {
+                                Sp::Literal(lit) => self.push(&escape_str(lit)),
+                                Sp::Ast(ast) => {
+                                    self.push(&format!("{}(", NIX_FORCE));
+                                    let txtrng = ast.node().text_range();
+                                    self.rtv(txtrng, ast.inner(), "inner for str-interpolate")?;
+                                    self.push(")");
+                                }
+                            }
                         }
+                        self.push(")");
                     }
                 }
-                self.push(")");
             }
 
             Pt::StrInterpol(si) => self.rtv(txtrng, si.inner(), "inner for str-interpolate")?,
