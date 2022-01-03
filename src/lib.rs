@@ -59,7 +59,7 @@ macro_rules! err {
 
 enum LetBody {
     Nix(NixNode),
-    Js(String),
+    ExtractScope,
 }
 
 type TranslateResult = Result<(), Vec<String>>;
@@ -293,6 +293,14 @@ impl Context<'_> {
         body: LetBody,
         scope: &str,
     ) -> TranslateResult {
+        if node.entries().next().is_none() && node.inherits().next().is_none() {
+            // empty attrset
+            match body {
+                LetBody::Nix(body) => self.translate_node(body, true)?,
+                LetBody::ExtractScope => self.push("Object.create(null)"),
+            }
+            return Ok(());
+        }
         self.push(&format!("(({})=>{{", scope));
         for i in node.entries() {
             self.translate_node_kv(i, scope)?;
@@ -303,7 +311,7 @@ impl Context<'_> {
         self.push("return ");
         match body {
             LetBody::Nix(body) => self.translate_node(body, true)?,
-            LetBody::Js(s) => self.push(&s),
+            LetBody::ExtractScope => self.push(&format!("{}[{}]", scope, NIX_EXTRACT_SCOPE)),
         }
         self.push(&format!(";}})({})", NIX_MK_SCOPE));
         Ok(())
@@ -359,11 +367,7 @@ impl Context<'_> {
                 } else {
                     "nixAttrsScope"
                 };
-                self.translate_let(
-                    &ars,
-                    LetBody::Js(format!("{}[{}]", scope, NIX_EXTRACT_SCOPE)),
-                    scope,
-                )?;
+                self.translate_let(&ars, LetBody::ExtractScope, scope)?;
             }
 
             Pt::BinOp(bo) => {
