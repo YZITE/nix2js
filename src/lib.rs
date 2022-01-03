@@ -627,6 +627,7 @@ impl Context<'_> {
             Pt::Str(s) => {
                 use rnix::value::StrPart as Sp;
                 match s.parts()[..] {
+                    [] => self.push("\"\""),
                     [Sp::Literal(ref lit)] => self.push(&escape_str(lit)),
                     ref sxs => {
                         self.push("(");
