@@ -5,13 +5,8 @@ import { isEqual } from 'lodash-es';
 export const API_VERSION = 0;
 
 const LazyHandler = {
-    get: function(target, prop, receiver) {
-        if (prop in target) {
-            return target[prop];
-        } else {
-            return target.evaluate()[prop];
-        }
-    }
+    get: (target, key) => (key in target) ? target[key] : target.evaluate()[key],
+    has: (target, key) => (key in target) || (key in target.evaluate()),
 };
 
 export class Lazy {
@@ -41,9 +36,6 @@ export class Lazy {
             }
         }
         return this.i;
-    }
-    map(mapper) {
-        return new Lazy(() => mapper(this.evaluate()));
     }
 }
 

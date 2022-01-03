@@ -46,16 +46,6 @@ describe('Lazy', function() {
         assert_eq(lobj.evaluate(), 2, "3rd");
     });
 
-    it('mappings should recurse', function() {
-        let ref = mkMut(0);
-        let lobj = new Lazy(function() {
-            ref.i += 1;
-            return ref.i;
-        });
-        assert_eq(lobj.map(x => x + 1).evaluate(), 2, "indirect");
-        assert_eq(lobj.evaluate(), 1, "secondary direct");
-    });
-
     it('automatic dereference should work', function() {
         let ref = mkMut(0);
         let lobj = new Lazy(function() {
