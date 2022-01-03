@@ -132,7 +132,7 @@ impl Context<'_> {
                     desc
                 ));
             }
-            Some(x) => self.translate_node(x),
+            Some(x) => self.translate_node(x, false),
         }
     }
 
@@ -176,7 +176,7 @@ impl Context<'_> {
             self.push(&escape_str(name.as_str()));
             self.snapshot_pos(txtrng.end(), is_ident);
         } else {
-            self.translate_node(node)?;
+            self.translate_node(node, false)?;
         }
         Ok(())
     }
@@ -215,7 +215,7 @@ impl Context<'_> {
             self.push(&format!("{}(", scope));
             self.translate_node_key_element(kpfi)?;
             self.push(",");
-            self.translate_node(value)?;
+            self.translate_node(value, true)?;
             self.push(");");
         } else {
             self.push(&format!("{}._deepMerge({}(", NIX_BUILTINS_RT, scope));
@@ -223,7 +223,7 @@ impl Context<'_> {
             // parts of the attrset instead of round-tripping thru $`scope`.
             self.translate_node_key_element(kpfi)?;
             self.push("),");
-            self.translate_node(value)?;
+            self.translate_node(value, true)?;
             for i in kpr {
                 self.push(",");
                 self.translate_node_key_element(i)?;
@@ -285,14 +285,14 @@ impl Context<'_> {
         }
         self.push("return ");
         match body {
-            LetBody::Nix(body) => self.translate_node(body)?,
+            LetBody::Nix(body) => self.translate_node(body, true)?,
             LetBody::Js(s) => self.push(&s),
         }
         self.push(&format!(";}})({})", NIX_MK_SCOPE));
         Ok(())
     }
 
-    fn translate_node(&mut self, node: NixNode) -> TranslateResult {
+    fn translate_node(&mut self, node: NixNode, insert_lazy: bool) -> TranslateResult {
         if node.kind().is_trivia() {
             return Ok(());
         }
@@ -313,11 +313,17 @@ impl Context<'_> {
 
         match x {
             Pt::Apply(app) => {
-                self.push(&format!("{}(()=>(", NIX_MKLAZY));
+                if insert_lazy {
+                    self.push(&format!("{}(()=>", NIX_MKLAZY));
+                }
+                self.push("(");
                 self.rtv(txtrng, app.lambda(), "lambda for application")?;
                 self.push(")(");
                 self.rtv(txtrng, app.value(), "value for application")?;
-                self.push("))");
+                self.push(")");
+                if insert_lazy {
+                    self.push(")");
+                }
             }
 
             Pt::Assert(art) => {
@@ -352,8 +358,8 @@ impl Context<'_> {
                                 if let Some(y) = Ident::cast(x.clone()) {
                                     self.push(&escape_str(y.as_str()));
                                 } else {
-                                    self.push(&format!("{force}(()=>", force = NIX_FORCE));
-                                    self.translate_node(x)?;
+                                    self.push(&format!("{force}(", force = NIX_FORCE));
+                                    self.translate_node(x, false)?;
                                     self.push(")");
                                 }
                             } else {
@@ -423,7 +429,7 @@ impl Context<'_> {
                     } else {
                         self.push(",");
                     }
-                    self.translate_node(i)?;
+                    self.translate_node(i, false)?;
                 }
                 self.push("]");
             }
@@ -468,7 +474,7 @@ impl Context<'_> {
                                         "=({argzas} !== undefined)?({argzas}):(",
                                         argzas = argzas,
                                     ));
-                                    self.translate_node(zdfl)?;
+                                    self.translate_node(zdfl, false)?;
                                     self.push(");");
                                 } else {
                                     // TODO: adjust error message to what Nix currently issues.
@@ -548,7 +554,7 @@ impl Context<'_> {
                     } else {
                         self.push(",");
                     }
-                    self.translate_node(i)?;
+                    self.translate_node(i, true)?;
                 }
                 self.push("]");
             }
@@ -580,19 +586,25 @@ impl Context<'_> {
             Pt::Root(r) => self.rtv(txtrng, r.inner(), "inner for root")?,
 
             Pt::Select(sel) => {
-                self.push(&format!("{}(()=>(", NIX_MKLAZY));
+                if insert_lazy {
+                    self.push(&format!("{}(()=>", NIX_MKLAZY));
+                }
+                self.push("(");
                 self.rtv(txtrng, sel.set(), "set for select")?;
                 self.push(")[");
                 if let Some(idx) = sel.index() {
                     if let Some(val) = Ident::cast(idx.clone()) {
                         self.push(&escape_str(val.as_str()));
                     } else {
-                        self.translate_node(idx)?;
+                        self.translate_node(idx, false)?;
                     }
                 } else {
-                    err!(format!("{:?}: {} missing", txtrng, "index for selectr"));
+                    err!(format!("{:?}: {} missing", txtrng, "index for select"));
                 }
-                self.push("])");
+                self.push("]");
+                if insert_lazy {
+                    self.push(")");
+                }
             }
 
             Pt::Str(s) => {
@@ -709,7 +721,7 @@ pub fn translate(s: &str, inp_name: &str) -> Result<(String, String), Vec<String
         lp_src: Default::default(),
         lp_dst: Default::default(),
     }
-    .translate_node(parsed.node())?;
+    .translate_node(parsed.node(), false)?;
     ret += ";})";
     let mappings = String::from_utf8(mappings).unwrap();
     Ok((
