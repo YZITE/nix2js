@@ -32,6 +32,20 @@ describe('Lazy', function() {
         assert_eq(lobj.evaluate(), 1, "3rd");
     });
 
+    it('should recurse/unfold', function() {
+        let ref = mkMut(0);
+        let lobj = new Lazy(function() {
+            ref.i += 1;
+            return new Lazy(function() {
+                ref.i += 1;
+                return ref.i;
+            });
+        });
+        assert_eq(lobj.evaluate(), 2, "1st");
+        assert_eq(lobj.evaluate(), 2, "2nd");
+        assert_eq(lobj.evaluate(), 2, "3rd");
+    });
+
     it('mappings should recurse', function() {
         let ref = mkMut(0);
         let lobj = new Lazy(function() {

@@ -28,10 +28,17 @@ export class Lazy {
         }
     }
     evaluate() {
-        if (this.iL) {
+        while (this.iL) {
             this.iL = false;
             let res = this.i.apply(this.i, arguments);
-            this.i = res;
+            // automatic unfolding
+            if (res instanceof Lazy) {
+                this.iL = res.iL;
+                this.i = res.i;
+            } else {
+                this.i = res;
+                break;
+            }
         }
         return this.i;
     }

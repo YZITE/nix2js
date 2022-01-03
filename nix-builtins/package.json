@@ -1,6 +1,6 @@
 {
   "name": "nix-builtins",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "nix2js builtin functions",
   "main": "index.min.js",
   "type": "module",
