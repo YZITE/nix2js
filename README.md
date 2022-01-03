@@ -3,6 +3,19 @@
 This is an experiment to try to transpile nix expressions to JavaScript and
 execute them via NodeJS.
 
+The (`target/release`)`nix2js` executable can be built using:
+```sh
+cargo build --release
+```
+
+## WASM
+
+The wasm version of `nix2js` can be built (requires `wasm-pack`, and it's dependencies) using:
+```sh
+(cd wasm && wasm-pack build)
+```
+The resulting code is then (if successful) present in `wasm/pkg`.
+
 ## REPL
 
 ```sh
