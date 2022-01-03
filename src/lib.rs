@@ -679,9 +679,8 @@ impl Context<'_> {
                         NixVal::String(s) => JsVal::String(s).to_string(),
                         NixVal::Path(anch, path) => {
                             format!(
-                                "{}({}).export({},{})",
+                                "{}.export({},{})",
                                 NIX_RUNTIME,
-                                self.txtrng_to_lineno(txtrng),
                                 escape_str(&format!("{:?}", anch)),
                                 escape_str(&path),
                             )
