@@ -22,8 +22,8 @@ mod postracker;
 use postracker::PosTracker;
 
 const NIX_BUILTINS_RT: &str = "nixBltiRT";
+const NIX_EXTRACT_SCOPE: &str = "nixBlti.extractScope";
 const NIX_LAZY: &str = "nixBlti.Lazy";
-const NIX_MKLAZY: &str = "nixBlti.mkLazy";
 const NIX_FORCE: &str = "nixBlti.force";
 const NIX_OR_DEFAULT: &str = "nixBlti.orDefault";
 const NIX_RUNTIME: &str = "nixRt";
@@ -91,21 +91,24 @@ impl Context<'_> {
         }
         use vlq::encode as vlqe;
         vlqe(dst_ocol.into(), &mut self.mappings).unwrap();
-        vlqe(0, self.mappings).unwrap();
-        vlqe(src_oline.into(), &mut self.mappings).unwrap();
-        vlqe(src_ocol.into(), &mut self.mappings).unwrap();
-        if is_ident {
-            if let Ok(ident) = std::str::from_utf8(ident) {
-                // reuse ident if already present
-                let idx = match self.names.iter().enumerate().find(|(_, i)| **i == ident) {
-                    Some((idx, _)) => idx,
-                    None => {
-                        let idx = self.names.len();
-                        self.names.push(ident.to_string());
-                        idx
-                    }
-                };
-                vlqe(idx.try_into().unwrap(), &mut self.mappings).unwrap();
+
+        if !(src_oline == 0 && src_ocol == 0) {
+            vlqe(0, self.mappings).unwrap();
+            vlqe(src_oline.into(), &mut self.mappings).unwrap();
+            vlqe(src_ocol.into(), &mut self.mappings).unwrap();
+            if is_ident {
+                if let Ok(ident) = std::str::from_utf8(ident) {
+                    // reuse ident if already present
+                    let idx = match self.names.iter().enumerate().find(|(_, i)| **i == ident) {
+                        Some((idx, _)) => idx,
+                        None => {
+                            let idx = self.names.len();
+                            self.names.push(ident.to_string());
+                            idx
+                        }
+                    };
+                    vlqe(idx.try_into().unwrap(), &mut self.mappings).unwrap();
+                }
             }
         }
 
@@ -153,9 +156,20 @@ impl Context<'_> {
                     // TODO: improve this
                     Sv::LambdaArg => format!("{}{}", NIX_LAMBDA_ARG_PFX, vn.replace("-", "___")),
                 },
-                None => format!("{}({})", NIX_IN_SCOPE, escape_str(vn)),
+                None => format!("{}[{}]", NIX_IN_SCOPE, escape_str(vn)),
             },
         }
+    }
+
+    fn translate_node_ident_escape_str(&mut self, id: &Ident) -> String {
+        let txtrng = id.node().text_range();
+        // if we don't make this conditional, we would record
+        // scrambled identifiers otherwise...
+        let is_ident = self.snapshot_pos(txtrng.start(), false).is_some();
+        let ret = escape_str(id.as_str());
+        self.push(&ret);
+        self.snapshot_pos(txtrng.end(), is_ident);
+        ret
     }
 
     fn translate_node_ident(&mut self, id: &Ident) -> String {
@@ -169,14 +183,14 @@ impl Context<'_> {
         ret
     }
 
-    fn translate_node_key_element(&mut self, node: NixNode) -> TranslateResult {
+    fn translate_node_key_element(&mut self, node: &NixNode) -> TranslateResult {
         if let Some(name) = Ident::cast(node.clone()) {
             let txtrng = name.node().text_range();
             let is_ident = self.snapshot_pos(txtrng.start(), false).is_some();
             self.push(&escape_str(name.as_str()));
             self.snapshot_pos(txtrng.end(), is_ident);
         } else {
-            self.translate_node(node, false)?;
+            self.translate_node(node.clone(), false)?;
         }
         Ok(())
     }
@@ -212,21 +226,26 @@ impl Context<'_> {
         };
 
         if kpr.is_empty() {
-            self.push(&format!("{}(", scope));
-            self.translate_node_key_element(kpfi)?;
-            self.push(",");
+            self.push(&format!("{}[", scope));
+            self.translate_node_key_element(&kpfi)?;
+            self.push("]=");
             self.translate_node(value, true)?;
-            self.push(");");
+            self.push(";");
         } else {
-            self.push(&format!("{}._deepMerge({}(", NIX_BUILTINS_RT, scope));
+            self.push("if(!(");
+            self.translate_node_key_element(&kpfi)?;
+            self.push(&format!(" in {})){{{}[", scope, scope)); /* } */
+            self.translate_node_key_element(&kpfi)?;
+            self.push("]=Object.create(null);}");
+            self.push(&format!("{}._deepMerge({}[", NIX_BUILTINS_RT, scope));
             // this is a bit cheating because we directly override
             // parts of the attrset instead of round-tripping thru $`scope`.
-            self.translate_node_key_element(kpfi)?;
-            self.push("),");
+            self.translate_node_key_element(&kpfi)?;
+            self.push("],");
             self.translate_node(value, true)?;
             for i in kpr {
                 self.push(",");
-                self.translate_node_key_element(i)?;
+                self.translate_node_key_element(&i)?;
             }
             self.push(");");
         }
@@ -245,26 +264,24 @@ impl Context<'_> {
             )?;
             self.push(");");
             for id in inh.idents() {
-                let idesc = escape_str(id.as_str());
                 self.push(scope);
-                self.push("(");
-                self.push(&idesc);
-                self.push(",new ");
+                self.push("[");
+                self.translate_node_ident_escape_str(&id);
+                self.push("]=new ");
                 self.push(NIX_LAZY);
                 self.push("(()=>nixInhR[");
-                self.push(&idesc);
-                self.push("]));");
+                self.translate_node_ident_escape_str(&id);
+                self.push("]);");
             }
             self.push("})();");
         } else {
             for id in inh.idents() {
-                let idas = id.as_str();
                 self.push(scope);
-                self.push("(");
-                self.push(&escape_str(idas));
-                self.push(",");
+                self.push("[");
+                self.translate_node_ident_escape_str(&id);
+                self.push("]=");
                 self.translate_node_ident(&id);
-                self.push(");");
+                self.push(";");
             }
         }
         Ok(())
@@ -314,7 +331,7 @@ impl Context<'_> {
         match x {
             Pt::Apply(app) => {
                 if insert_lazy {
-                    self.push(&format!("{}(()=>", NIX_MKLAZY));
+                    self.push(&format!("new {}(()=>", NIX_LAZY));
                 }
                 self.push("(");
                 self.rtv(txtrng, app.lambda(), "lambda for application")?;
@@ -342,8 +359,11 @@ impl Context<'_> {
                 } else {
                     "nixAttrsScope"
                 };
-                // calling the scope with no arguments gives us the constructed attrset
-                self.translate_let(&ars, LetBody::Js(format!("{}()", scope)), scope)?;
+                self.translate_let(
+                    &ars,
+                    LetBody::Js(format!("{}[{}]", scope, NIX_EXTRACT_SCOPE)),
+                    scope,
+                )?;
             }
 
             Pt::BinOp(bo) => {
@@ -356,7 +376,7 @@ impl Context<'_> {
                             self.push(").hasOwnProperty(");
                             if let Some(x) = bo.rhs() {
                                 if let Some(y) = Ident::cast(x.clone()) {
-                                    self.push(&escape_str(y.as_str()));
+                                    self.translate_node_ident_escape_str(&y);
                                 } else {
                                     self.push(&format!("{force}(", force = NIX_FORCE));
                                     self.translate_node(x, false)?;
@@ -372,9 +392,9 @@ impl Context<'_> {
                         }
                         _ => {
                             self.push(&format!("{}.nixop__{:?}", NIX_BUILTINS_RT, op));
-                            self.push(&format!("({mklazy}(()=>", mklazy = NIX_MKLAZY));
+                            self.push(&format!("(new {}(()=>", NIX_LAZY));
                             self.rtv(txtrng, bo.lhs(), "lhs for binop")?;
-                            self.push(&format!("),{mklazy}(()=>", mklazy = NIX_MKLAZY));
+                            self.push(&format!("),new {}(()=>", NIX_LAZY));
                             self.rtv(txtrng, bo.rhs(), "lhs for binop")?;
                             self.push("))");
                         }
@@ -465,19 +485,26 @@ impl Context<'_> {
                                 self.translate_node_ident(&z);
                                 self.push("=");
                                 if let Some(zdfl) = i.default() {
-                                    self.push(&format!(
-                                        "({argzas} !==undefined)?({argzas}):(",
-                                        argzas = format!("{}[{}]", argname, escape_str(z.as_str())),
-                                    ));
+                                    self.push("(");
+                                    let push_argzas = |this: &mut Context<'_>| {
+                                        this.push(&argname);
+                                        this.push("[");
+                                        this.translate_node_ident_escape_str(&z);
+                                        this.push("]");
+                                    };
+                                    push_argzas(self);
+                                    self.push(" !==undefined)?(");
+                                    push_argzas(self);
+                                    self.push("):(");
                                     self.translate_node(zdfl, false)?;
                                     self.push(")");
                                 } else {
                                     self.push(&format!(
-                                        "{}._lambdaA2chk({},{})",
-                                        NIX_BUILTINS_RT,
-                                        argname,
-                                        escape_str(z.as_str()),
+                                        "{}._lambdaA2chk({},",
+                                        NIX_BUILTINS_RT, argname,
                                     ));
+                                    self.translate_node_ident_escape_str(&z);
+                                    self.push(")");
                                 }
                                 self.push(";");
                             } else {
@@ -554,11 +581,7 @@ impl Context<'_> {
             }
 
             Pt::OrDefault(od) => {
-                self.push(&format!(
-                    "{ordfl}({mklazy}(()=>(",
-                    ordfl = NIX_OR_DEFAULT,
-                    mklazy = NIX_MKLAZY,
-                ));
+                self.push(&format!("{}(new {}(()=>(", NIX_OR_DEFAULT, NIX_LAZY));
                 self.rtv(
                     txtrng,
                     od.index().map(|i| i.node().clone()),
@@ -581,7 +604,7 @@ impl Context<'_> {
 
             Pt::Select(sel) => {
                 if insert_lazy {
-                    self.push(&format!("{}(()=>", NIX_MKLAZY));
+                    self.push(&format!("new {}(()=>", NIX_LAZY));
                 }
                 self.push("(");
                 self.rtv(txtrng, sel.set(), "set for select")?;
@@ -675,7 +698,7 @@ impl Context<'_> {
             Pt::With(with) => {
                 self.push(&format!("({}=>(", NIX_IN_SCOPE));
                 self.rtv(txtrng, with.body(), "body for 'with' scope")?;
-                self.push("))(nixBlti.mkScopeWith(nixInScope,");
+                self.push(&format!("))(nixBlti.mkScopeWith({},", NIX_IN_SCOPE));
                 self.rtv(txtrng, with.namespace(), "namespace for 'with' scope")?;
                 self.push("))");
             }
@@ -705,7 +728,7 @@ pub fn translate(s: &str, inp_name: &str) -> Result<(String, String), Vec<String
     ret += NIX_BUILTINS_RT;
     ret += "=nixBlti.initRtDep(nixRt);let ";
     ret += NIX_IN_SCOPE;
-    ret += "=undefined;return ";
+    ret += "=nixBlti.mkScopeWith();return ";
     Context {
         inp: s,
         acc: &mut ret,

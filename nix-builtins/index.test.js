@@ -1,11 +1,11 @@
-import { Lazy, force, mkScope, initRtDep } from "./index.js";
+import { Lazy, force, initRtDep, allKeys, extractScope, mkScope, mkScopeWith } from "./index.js";
 import { isEqual } from 'lodash-es';
 import assert from 'webassert';
 
 function mkMut(i) { return { i: i }; }
 function assert_eq(a, b, msg) {
     if (!isEqual(a, b)) {
-        console.warn("\tfor '" + msg + "': (" + a.toString() + ") !== (" + b.toString() + ")");
+        console.warn("\tfor '" + msg + "': (", a, ") !== (", b, ")");
         assert(false, msg);
     }
 }
@@ -100,22 +100,61 @@ describe('force', function() {
 
 describe('mkScope', function() {
     it('should work standalone', function() {
-        let sc = mkScope();
-        assert_eq(sc("a", 1), undefined, "(1s)");
-        assert_eq(sc("a"), 1, "(1g)");
-        assert_eq(sc("b", 2), undefined, "(2s)");
-        assert_eq(sc("b"), 2, "(2g)");
-        assert_eq(sc("a"), 1, "(3g)");
+        let sc = mkScope(null);
+        sc['a'] = 1;
+        assert_eq(sc['a'], 1, "(1)");
+        sc['b'] = 2;
+        assert_eq(sc['b'], 2, "(2)");
+        assert_eq(sc['a'], 1, "(3)");
+        try {
+            sc['a'] = 2;
+            assert(false, "unreachable");
+        } catch(e) {
+            assert_eq(e.message, "'set' on proxy: trap returned falsish for property 'a'");
+        }
+        assert_eq(sc[allKeys], ['a', 'b']);
     });
 
     it('should work recursively', function() {
-        let sc1 = mkScope();
+        let sc1 = mkScope(null);
         let sc2 = mkScope(sc1);
-        assert_eq(sc1("a", 1), undefined, "(1)");
-        assert_eq(sc2("a"), 1, "(2)");
-        assert_eq(sc2("a", 2), undefined, "(3)");
-        assert_eq(sc1("a"), 1, "(4)");
-        assert_eq(sc2("a"), 2, "(5)");
+        sc1['a'] = 1;
+        assert_eq(sc2['a'], 1, "(1)");
+        sc2['a'] = 2;
+        assert_eq(sc1['a'], 1, "(2)");
+        assert_eq(sc2['a'], 2, "(3)");
+        assert_eq(sc1[allKeys], ['a'], "(4)");
+        assert_eq(sc2[allKeys], ['a'], "(5)");
+        assert_eq(sc1[extractScope], {'a':1}, "(6)");
+        assert_eq(sc2[extractScope], {'a':2}, "(7)");
+    });
+});
+
+describe('mkScopeWith', function() {
+    it('should deny modifications', function() {
+        let sc = mkScopeWith();
+        try {
+            sc['a'] = 2;
+            assert(false, "unreachable");
+        } catch(e) {
+            assert_eq(e.message, "tried overwriting key 'a' in read-only scope");
+        }
+    });
+
+    it('should propagate get requests', function() {
+        let scbase = mkScopeWith();
+        let sc1 = mkScope(scbase);
+        sc1['x'] = 1;
+        let sc2 = mkScopeWith(sc1);
+        try {
+            sc2['x'] = 2;
+            assert(false, "unreachable");
+        } catch(e) {
+            assert_eq(e.message, "tried overwriting key 'x' in read-only scope", "error message");
+        }
+        assert_eq(sc1[allKeys], ['x'], "(keys1)");
+        assert_eq(sc2[allKeys], ['x'], "(keys2)");
+        assert_eq(sc2['x'], 1, "(get)");
     });
 });
 

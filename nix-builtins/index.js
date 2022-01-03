@@ -55,44 +55,91 @@ export function force(value) {
     }
 }
 
-// this ensures correct evaluation when evaluating lazy values
-export function mkLazy(maker) {
-    return new Lazy(()=>force(maker()));
+function onlyUnique(value, index, self) {
+    return self.indexOf(value) == index;
 }
+
+class ScopeError extends Error { constructor(message, options) { super(message, options); } }
+
+// used to get all keys present in a scope, including inherited ones
+export const allKeys = Symbol('__all__');
+
+// used to get the current scope, but detached from it's parent scope and
+// without the proxy wrapper.
+export const extractScope = Symbol('__dict__');
 
 export function mkScope(orig) {
-    // this is basically an interior mutable associative array.
-    let scref = {i:{}};
-    return function(key, value) {
-        if (key === undefined) {
-            return scref.i;
-        } else if (value !== undefined) {
-            scref.i[key] = value;
-        } else if (scref.i[key] !== undefined) {
-            return scref.i[key];
-        } else if (orig !== undefined) {
-            return orig(key, undefined);
-        } else {
-            throw ReferenceError('dynscoped nix__' + key + ' is not defined');
+    // we need to handle mkScope()
+    let orig_keys = orig ? (() => Object.keys(orig)) : (() => []);
+    // Object.create prevents prototype pollution
+    let current = Object.create(orig);
+    // self-referential properties
+    Object.defineProperty(current, allKeys, {
+        get:()=>Object.keys(current).concat(orig_keys()).filter(onlyUnique),
+    });
+    Object.defineProperty(current, extractScope, {
+        get:()=>Object.assign(Object.create(null),current),
+    });
+    return new Proxy(current, {
+        set: function(target, key, value) {
+            let ret = !Object.prototype.hasOwnProperty.call(target, key);
+            if (ret) {
+                Object.defineProperty(target, key, {
+                    value: value,
+                    configurable: false,
+                    enumerable: true,
+                    writable: false,
+                });
+            }
+            return ret;
         }
-    };
+    });
 }
 
-export function mkScopeWith(orig, withns_) {
-    return function(key, value) {
-        let withns = force(withns_);
-        if (key === undefined) {
-            return Object.assign({}, withns);
-        } else if (value !== undefined) {
-            throw ReferenceError('withscoped nix__' + key + ' is read-only');
-        } else if (withns[key] !== undefined) {
-            return withns[key];
-        } else if (orig !== undefined) {
-            return orig(key, undefined);
+// mark an object as read-only
+const readOnlyHandler = {
+    set: function(target, key, value) {
+        throw new ScopeError("tried overwriting key '" + key + "' in read-only scope");
+    },
+    deleteProperty: function(target, key) {
+        if (key in target) {
+            throw new ScopeError("tried removing key '" + key + "' from read-only scope");
         } else {
-            throw ReferenceError('withscoped nix__' + key + ' is not defined');
+            return false;
+        }
+    },
+    defineProperty: (target, key, desc) => {
+        throw new ScopeError("tried modifying property '" + key + "' on read-only scope");
+    },
+    getOwnPropertyDescriptor: function(target, key) {
+        let tmp = Object.getOwnPropertyDescriptor(target, key);
+        if (tmp) {
+            tmp.writable = false;
+        }
+        return tmp;
+    }
+};
+
+export function mkScopeWith(...objs) {
+    let handler = Object.create(readOnlyHandler);
+    handler.get = (target, key) => {
+        if (key in target) {
+            return target[key];
+        } else {
+            let tmp = objs.find(obj => key in obj);
+            return (tmp !== undefined) ? tmp[key] : undefined;
         }
     };
+    handler.has = (target, key) => (key in target) || objs.some(obj => key in obj);
+    return new Proxy(Object.create(null, {
+        [allKeys]: {
+            get: () => objs
+                .map(obj=>obj[allKeys])
+                .flat()
+                .filter(i=>i!==undefined)
+                .filter(onlyUnique)
+        }
+    }), handler);
 }
 
 export function orDefault(lazy_selop, lazy_dfl) {
