@@ -126,7 +126,13 @@ impl Context<'_> {
             .count()
     }
 
-    fn rtv(&mut self, txtrng: rnix::TextRange, x: Option<NixNode>, desc: &str) -> TranslateResult {
+    fn rtv(
+        &mut self,
+        txtrng: rnix::TextRange,
+        x: Option<NixNode>,
+        insert_lazy: bool,
+        desc: &str,
+    ) -> TranslateResult {
         match x {
             None => {
                 err!(format!(
@@ -135,7 +141,7 @@ impl Context<'_> {
                     desc
                 ));
             }
-            Some(x) => self.translate_node(x, false),
+            Some(x) => self.translate_node(x, insert_lazy),
         }
     }
 
@@ -267,6 +273,7 @@ impl Context<'_> {
                 self.rtv(
                     inhf.node().text_range(),
                     inhf.inner(),
+                    false,
                     "inner for inherit-from",
                 )?;
                 self.push(")[");
@@ -279,6 +286,7 @@ impl Context<'_> {
                 self.rtv(
                     inhf.node().text_range(),
                     inhf.inner(),
+                    false,
                     "inner for inherit-from",
                 )?;
                 self.push(");");
@@ -362,9 +370,9 @@ impl Context<'_> {
                     self.push(&format!("new {}(()=>", NIX_LAZY));
                 }
                 self.push("(");
-                self.rtv(txtrng, app.lambda(), "lambda for application")?;
+                self.rtv(txtrng, app.lambda(), false, "lambda for application")?;
                 self.push(")(");
-                self.rtv(txtrng, app.value(), "value for application")?;
+                self.rtv(txtrng, app.value(), false, "value for application")?;
                 self.push(")");
                 if insert_lazy {
                     self.push(")");
@@ -375,9 +383,9 @@ impl Context<'_> {
                 self.push("(()=>{");
                 self.push(NIX_BUILTINS_RT);
                 self.push(".assert(");
-                self.rtv(txtrng, art.condition(), "condition for assert")?;
+                self.rtv(txtrng, art.condition(), false, "condition for assert")?;
                 self.push("); return (");
-                self.rtv(txtrng, art.body(), "body for assert")?;
+                self.rtv(txtrng, art.body(), false, "body for assert")?;
                 self.push("); })()");
             }
 
@@ -399,7 +407,7 @@ impl Context<'_> {
                                 "new {lazy}(()=>Object.prototype.hasOwnProperty.call(",
                                 lazy = NIX_LAZY
                             ));
-                            self.rtv(txtrng, bo.lhs(), "lhs for binop ?")?;
+                            self.rtv(txtrng, bo.lhs(), false, "lhs for binop ?")?;
                             self.push(",");
                             if let Some(x) = bo.rhs() {
                                 if let Some(y) = Ident::cast(x.clone()) {
@@ -420,9 +428,9 @@ impl Context<'_> {
                         _ => {
                             self.push(&format!("{}.nixop__{:?}", NIX_BUILTINS_RT, op));
                             self.push(&format!("(new {}(()=>", NIX_LAZY));
-                            self.rtv(txtrng, bo.lhs(), "lhs for binop")?;
+                            self.rtv(txtrng, bo.lhs(), false, "lhs for binop")?;
                             self.push(&format!("),new {}(()=>", NIX_LAZY));
-                            self.rtv(txtrng, bo.rhs(), "lhs for binop")?;
+                            self.rtv(txtrng, bo.rhs(), false, "lhs for binop")?;
                             self.push("))");
                         }
                     }
@@ -438,7 +446,7 @@ impl Context<'_> {
                 // dynamic key component
                 self.push(NIX_FORCE);
                 self.push("(");
-                self.rtv(txtrng, d.inner(), "inner for dynamic (key)")?;
+                self.rtv(txtrng, d.inner(), false, "inner for dynamic (key)")?;
                 self.push(")");
             }
 
@@ -455,11 +463,11 @@ impl Context<'_> {
                 }
                 self.push(NIX_FORCE);
                 self.push("(");
-                self.rtv(txtrng, ie.condition(), "condition for if-else")?;
+                self.rtv(txtrng, ie.condition(), false, "condition for if-else")?;
                 self.push(")?(");
-                self.rtv(txtrng, ie.body(), "if-body for if-else")?;
+                self.rtv(txtrng, ie.body(), false, "if-body for if-else")?;
                 self.push("):(");
-                self.rtv(txtrng, ie.else_body(), "else-body for if-else")?;
+                self.rtv(txtrng, ie.else_body(), false, "else-body for if-else")?;
                 self.push(")");
                 if insert_lazy {
                     self.push("))");
@@ -468,7 +476,9 @@ impl Context<'_> {
 
             Pt::Inherit(inh) => self.translate_node_inherit(inh, NIX_IN_SCOPE)?,
 
-            Pt::InheritFrom(inhf) => self.rtv(txtrng, inhf.inner(), "inner for inherit-from")?,
+            Pt::InheritFrom(inhf) => {
+                self.rtv(txtrng, inhf.inner(), insert_lazy, "inner for inherit-from")?
+            }
 
             Pt::Key(key) => {
                 let mut fi = true;
@@ -496,7 +506,7 @@ impl Context<'_> {
                         self.vars.push((yas.to_string(), ScopedVar::LambdaArg));
                         self.translate_node_ident(&y);
                         self.push("=>(");
-                        self.rtv(txtrng, lam.body(), "body for lambda")?;
+                        self.rtv(txtrng, lam.body(), false, "body for lambda")?;
                         assert!(self.vars.len() >= cur_lamstk);
                         self.vars.truncate(cur_lamstk);
                         self.push(")");
@@ -547,7 +557,7 @@ impl Context<'_> {
                         // FIXME: handle missing ellipsis
 
                         self.push("return ");
-                        self.rtv(txtrng, lam.body(), "body for lambda")?;
+                        self.rtv(txtrng, lam.body(), false, "body for lambda")?;
                         assert!(self.vars.len() >= cur_lamstk);
                         self.vars.truncate(cur_lamstk);
                         self.push("}");
@@ -610,7 +620,7 @@ impl Context<'_> {
                     } else {
                         self.push(",");
                     }
-                    self.translate_node(i, true)?;
+                    self.translate_node(i, insert_lazy)?;
                 }
                 self.push("]");
             }
@@ -620,14 +630,15 @@ impl Context<'_> {
                 self.rtv(
                     txtrng,
                     od.index().map(|i| i.node().clone()),
+                    false,
                     "or-default without indexing operation",
                 )?;
                 self.push(")),");
-                self.rtv(txtrng, od.default(), "or-default without default")?;
+                self.rtv(txtrng, od.default(), true, "or-default without default")?;
                 self.push(")");
             }
 
-            Pt::Paren(p) => self.rtv(txtrng, p.inner(), "inner for paren")?,
+            Pt::Paren(p) => self.rtv(txtrng, p.inner(), insert_lazy, "inner for paren")?,
             Pt::PathWithInterpol(p) => {
                 unreachable!("standalone path-with-interpolation not supported: {:?}", p)
             }
@@ -635,14 +646,14 @@ impl Context<'_> {
             Pt::PatBind(p) => unreachable!("standalone pattern @ bind not supported: {:?}", p),
             Pt::PatEntry(p) => unreachable!("standalone pattern entry not supported: {:?}", p),
 
-            Pt::Root(r) => self.rtv(txtrng, r.inner(), "inner for root")?,
+            Pt::Root(r) => self.rtv(txtrng, r.inner(), insert_lazy, "inner for root")?,
 
             Pt::Select(sel) => {
                 if insert_lazy {
                     self.push(&format!("new {}(()=>", NIX_LAZY));
                 }
                 self.push("(");
-                self.rtv(txtrng, sel.set(), "set for select")?;
+                self.rtv(txtrng, sel.set(), false, "set for select")?;
                 self.push(")[");
                 if let Some(idx) = sel.index() {
                     if let Some(val) = Ident::cast(idx.clone()) {
@@ -679,7 +690,12 @@ impl Context<'_> {
                                 Sp::Ast(ast) => {
                                     self.push(&format!("{}(", NIX_FORCE));
                                     let txtrng = ast.node().text_range();
-                                    self.rtv(txtrng, ast.inner(), "inner for str-interpolate")?;
+                                    self.rtv(
+                                        txtrng,
+                                        ast.inner(),
+                                        false,
+                                        "inner for str-interpolate",
+                                    )?;
                                     self.push(")");
                                 }
                             }
@@ -689,7 +705,9 @@ impl Context<'_> {
                 }
             }
 
-            Pt::StrInterpol(si) => self.rtv(txtrng, si.inner(), "inner for str-interpolate")?,
+            Pt::StrInterpol(si) => {
+                self.rtv(txtrng, si.inner(), insert_lazy, "inner for str-interpolate")?
+            }
 
             Pt::UnaryOp(uo) => {
                 use UnaryOpKind as Uok;
@@ -697,7 +715,7 @@ impl Context<'_> {
                     Uok::Invert | Uok::Negate => {}
                 }
                 self.push(&format!("{}.nixuop__{:?}(", NIX_BUILTINS_RT, uo.operator()));
-                self.rtv(txtrng, uo.value(), "value for unary-op")?;
+                self.rtv(txtrng, uo.value(), false, "value for unary-op")?;
                 self.push(")");
             }
 
@@ -732,9 +750,14 @@ impl Context<'_> {
 
             Pt::With(with) => {
                 self.push(&format!("({}=>(", NIX_IN_SCOPE));
-                self.rtv(txtrng, with.body(), "body for 'with' scope")?;
+                self.rtv(txtrng, with.body(), insert_lazy, "body for 'with' scope")?;
                 self.push(&format!("))(nixBlti.mkScopeWith({},", NIX_IN_SCOPE));
-                self.rtv(txtrng, with.namespace(), "namespace for 'with' scope")?;
+                self.rtv(
+                    txtrng,
+                    with.namespace(),
+                    false,
+                    "namespace for 'with' scope",
+                )?;
                 self.push("))");
             }
         }
