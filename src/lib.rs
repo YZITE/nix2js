@@ -28,7 +28,6 @@ const NIX_FORCE: &str = "nixBlti.force";
 const NIX_OR_DEFAULT: &str = "nixBlti.orDefault";
 const NIX_RUNTIME: &str = "nixRt";
 const NIX_IN_SCOPE: &str = "nixInScope";
-const NIX_MK_SCOPE: &str = "nixBlti.mkScope(nixInScope)";
 const NIX_LAMBDA_ARG_PFX: &str = "nix__";
 const NIX_LAMBDA_BOUND: &str = "nixBound";
 
@@ -341,7 +340,11 @@ impl Context<'_> {
             LetBody::Nix(body) => self.translate_node(body, true)?,
             LetBody::ExtractScope => self.push(&format!("{}[{}]", scope, NIX_EXTRACT_SCOPE)),
         }
-        self.push(&format!(";}})({})", NIX_MK_SCOPE));
+        self.push(";})(nixBlti.mkScope(");
+        if scope == NIX_IN_SCOPE {
+            self.push(NIX_IN_SCOPE);
+        }
+        self.push("))");
         Ok(())
     }
 
