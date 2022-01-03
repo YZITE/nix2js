@@ -5,7 +5,7 @@
  - `throw(message)`: throws a javascript exception,
     should automatically supply the correct file name
     (triggered by `assert` and `throw` if hit)
- - `abort(message)`: like `error`, but triggered by `abort` if hit
+ - `abort(message)`: like `throw`, but triggered by `abort` if hit
  - `derive(derivation_attrset)`: should realise a derivation
     (used e.g. for import-from-derivation, also gets linked onto derivations)
  - `export(anchor,path)`: export a path into the nix store
@@ -462,7 +462,7 @@ impl Context<'_> {
                                 self.vars
                                     .push((z.as_str().to_string(), ScopedVar::LambdaArg));
                                 self.push("let ");
-                                let zname = self.translate_node_ident(&z);
+                                self.translate_node_ident(&z);
                                 let argzas = if z.as_str().contains(|i: char| !i.is_alphanumeric())
                                 {
                                     format!("{}[{}]", argname, escape_str(z.as_str()))
@@ -471,19 +471,17 @@ impl Context<'_> {
                                 };
                                 if let Some(zdfl) = i.default() {
                                     self.push(&format!(
-                                        "=({argzas} !== undefined)?({argzas}):(",
+                                        "=({argzas} !==undefined)?({argzas}):(",
                                         argzas = argzas,
                                     ));
                                     self.translate_node(zdfl, false)?;
                                     self.push(");");
                                 } else {
-                                    // TODO: adjust error message to what Nix currently issues.
                                     self.push(&format!(
-                                        "={argzas};if({zname}===undefined){{{rt}.error(\"attrset element {zas} missing at lambda call\");}} ",
+                                        "={blti}._lambdaA2chk({zas},{argzas});",
+                                        zas = escape_str(z.as_str()),
                                         argzas = argzas,
-                                        zas = escape_str(z.as_str()).replace("\"", ""),
-                                        zname = zname,
-                                        rt = NIX_RUNTIME,
+                                        blti = NIX_BUILTINS_RT,
                                     ));
                                 }
                             } else {

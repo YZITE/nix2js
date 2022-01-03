@@ -188,6 +188,13 @@ export function initRtDep(nixRt) {
                 }
             }
         },
+        _lambdaA2chk: function(key, value) {
+            if (value === undefined) {
+                // TODO: adjust error message to what Nix currently issues.
+                nixRt.throw("attrset element " + key + "missing at lambda call");
+            }
+            return value;
+        },
         nixop__Concat: binop_helper("operator ++", function(a, b) {
             if (typeof a !== 'object') {
                 nixRt.throw("operator ++: invalid input type (" + typeof a + ")");
