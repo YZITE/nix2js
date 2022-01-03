@@ -467,13 +467,16 @@ impl Context<'_> {
                 if let Some(x) = lam.arg() {
                     // FIXME: use guard to truncate vars
                     let cur_lamstk = self.vars.len();
-                    self.push("(function(");
+                    self.push("(");
                     if let Some(y) = Ident::cast(x.clone()) {
                         let yas = y.as_str();
                         self.vars.push((yas.to_string(), ScopedVar::LambdaArg));
                         self.translate_node_ident(&y);
-                        self.push("){");
-                        // } -- this fixes brace association
+                        self.push("=>(");
+                        self.rtv(txtrng, lam.body(), "body for lambda")?;
+                        assert!(self.vars.len() >= cur_lamstk);
+                        self.vars.truncate(cur_lamstk);
+                        self.push(")");
                     } else if let Some(y) = Pattern::cast(x) {
                         let argname = if let Some(z) = y.at() {
                             self.vars
@@ -483,7 +486,7 @@ impl Context<'_> {
                             self.push(NIX_LAMBDA_BOUND);
                             NIX_LAMBDA_BOUND.to_string()
                         };
-                        self.push("){");
+                        self.push("=>{");
                         for i in y.entries() {
                             if let Some(z) = i.name() {
                                 self.push("let ");
@@ -519,14 +522,16 @@ impl Context<'_> {
                             }
                         }
                         // FIXME: handle missing ellipsis
+
+                        self.push("return ");
+                        self.rtv(txtrng, lam.body(), "body for lambda")?;
+                        assert!(self.vars.len() >= cur_lamstk);
+                        self.vars.truncate(cur_lamstk);
+                        self.push("}");
                     } else {
                         err!(format!("lambda ({:?}) with invalid argument", lam));
                     }
-
-                    self.rtv(txtrng, lam.body(), "body for lambda")?;
-                    assert!(self.vars.len() >= cur_lamstk);
-                    self.vars.truncate(cur_lamstk);
-                    self.push("})");
+                    self.push(")");
                 } else {
                     err!(format!("lambda ({:?}) with missing argument", lam));
                 }
