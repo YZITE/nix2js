@@ -427,17 +427,20 @@ impl Context<'_> {
             }
 
             Pt::IfElse(ie) => {
-                self.push("new ");
-                self.push(NIX_LAZY);
-                self.push("(function(){let nixRet=undefined;if(");
+                if insert_lazy {
+                    self.push(&format!("new {}(()=>(", NIX_LAZY));
+                }
                 self.push(NIX_FORCE);
                 self.push("(");
                 self.rtv(txtrng, ie.condition(), "condition for if-else")?;
-                self.push(")){nixRet=");
+                self.push(")?(");
                 self.rtv(txtrng, ie.body(), "if-body for if-else")?;
-                self.push(";}else{nixRet=");
+                self.push("):(");
                 self.rtv(txtrng, ie.else_body(), "else-body for if-else")?;
-                self.push(";}return nixRet;})");
+                self.push(")");
+                if insert_lazy {
+                    self.push("))");
+                }
             }
 
             Pt::Inherit(inh) => self.translate_node_inherit(inh, NIX_IN_SCOPE)?,
