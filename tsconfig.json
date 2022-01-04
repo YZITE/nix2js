@@ -4,8 +4,9 @@
     "declaration": true,
     "declarationMap": true,
     "esModuleInterop": true,
+    "module": "ES2020",
     "moduleResolution": "node",
     "sourceMap": false,
-    "target": "es2020"
+    "target": "ES2020"
   }
 }

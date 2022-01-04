@@ -6,67 +6,16 @@ import assert from 'webassert';
 export const API_VERSION = 0;
 
 export class NixAbortError extends Error { }
-export class NixEvalError extends Error { }
-
-const LazyHandler = {
-    get: (target, key) => (key in target) ? target[key] : target.evaluate()[key],
-    has: (target, key) => (key in target) || (key in target.evaluate()),
-};
-
-export class Lazy {
-    private i: any;
-    private iL: boolean;
-    constructor(inner) {
-        // TODO: maybe integrate Promise objects
-        this.i = inner;
-        let toi = typeof inner;
-        this.iL = toi === "function";
-        if (toi === 'object') {
-            // automatic unfolding
-            return inner;
-        } else {
-            // automatic attrset unfolding
-            return new Proxy(this, LazyHandler);
-        }
-    }
-    evaluate() {
-        while (this.iL) {
-            this.iL = false;
-            let buf = this.i;
-            // poison inner Apply.
-            this.i = ()=>{throw new NixEvalError('self-referential lazy evaluation is forbidden')};
-            this.i._poison = true;
-            try {
-                let res = buf.apply(buf, arguments);
-                // automatic unfolding
-                if (res instanceof Lazy) {
-                    this.iL = res.iL;
-                    this.i = res.i;
-                } else {
-                    this.i = res;
-                    break;
-                }
-            } finally {
-                if (this.i instanceof Function && this.i._poison === true) {
-                    // restore the function in case of failure
-                    this.i = buf;
-                }
-            }
-        }
-        return this.i;
-    }
-}
+export class NixEvalError  extends Error { }
 
 // TODO: add class for StringWithContext, although that might be unnecessary,
 // because we don't serialize derivations before submit...
 
-export const force = value => (value instanceof Lazy) ? value.evaluate() : value;
+type MaybePromise<T> = T | Promise<T>;
+
 const onlyUnique = (value, index, self) => self.indexOf(value) == index;
-const fmt_fname = fname => (fname.length != 1) ? fname : ('operator ' + fname);
+const fmt_fname = (fname: string): string => (fname.length != 1) ? fname : ('operator ' + fname);
 const natyforce = (objty, natty, ax) => function(val) {
-    if(val instanceof Lazy) {
-        val = val.evaluate();
-    }
     if(val instanceof objty) {
         val = val.valueOf();
     }
@@ -76,9 +25,6 @@ const natyforce = (objty, natty, ax) => function(val) {
     return val;
 };
 const otyforce = (objty, ax) => function(val) {
-    if(val instanceof Lazy) {
-        val = val.evaluate();
-    }
     if(typeof val !== 'object') {
         throw TypeError('value is ' + typeof val + ' while an object was expected');
     }
@@ -109,7 +55,7 @@ export const allKeys = Symbol('__all__');
 // without the proxy wrapper.
 export const extractScope = Symbol('__dict__');
 
-export function mkScope(orig: undefined | null | object): object {
+export function mkScope(orig?: null | object): object {
     if (orig === undefined) {
         // "Object prototype may only be an Object or null"
         orig = null;
@@ -194,56 +140,113 @@ const splitVersion = s => s
     .map(x => x.split(/([A-Za-z]+|[0-9]+)/).filter((elem,idx) => idx%2))
     .flat();
 
-export function orDefault(lazy_selop, lazy_dfl) {
+export function orDefault(selopf, dflf) {
     let ret;
     try {
-        ret = lazy_selop.evaluate();
+        ret = selopf();
     } catch (e) {
         // this is flaky...
         if (e instanceof TypeError && e.message.startsWith('Cannot read properties of undefined ')) {
             console.debug("nix-blti.orDefault: encountered+catched TypeError:", e);
-            return lazy_dfl.evaluate();
+            return dflf();
         } else {
             throw e;
         }
     }
     if (ret === undefined) {
-        ret = lazy_dfl.evaluate();
+        ret = dflf();
     }
     return ret;
 }
 
-const binop_helper = (fname, f) => function(a, c) {
-    let b = force(a);
-    let d = force(c);
-    let tb = typeof b;
-    let td = typeof d;
-    if (tb === td) {
-        return f(b, d);
-    } else {
-        throw TypeError(fmt_fname(fname) + ": given types mismatch (" + tb + " != " + td + ")");
-    }
-};
+function binop_helper<T,R>(fname: string, f: (a: T, b: T) => R) {
+    return async function(a: MaybePromise<T>, b: MaybePromise<T>): Promise<R> {
+        a = await a;
+        b = await b;
+        let ta = typeof a;
+        let tb = typeof b;
+        if (ta === tb) {
+            return f(a, b);
+        } else {
+            throw TypeError(fmt_fname(fname) + ": given types mismatch (" + ta + " != " + tb + ")");
+        }
+    };
+}
 
-function req_type(fname, x, xptype) {
+function req_type<T>(fname: string, x: T, xptype: string): void {
     if (typeof x !== xptype) {
         throw TypeError(fmt_fname(fname) + ": invalid input type (" + typeof x + "), expected (" + xptype + ")");
     }
 }
 
-const isAttrs = e => typeof e === 'object' && !(
+function req_number<T>(fname: string, x: T, y: T): [number, number] {
+    req_type(fname, x, "number");
+    return [(x as any) as number, (y as any) as number];
+}
+
+function req_boolean<T>(fname: string, x: T, y: T): [boolean, boolean] {
+    req_type(fname, x, "boolean");
+    return [(x as any) as boolean, (y as any) as boolean];
+}
+
+const isAttrs = (e: any): boolean => typeof e === 'object' && !(
        (e instanceof Boolean)
     || (e instanceof Number)
     || (e instanceof String)
-    || (e instanceof Lazy)
 );
 
-const deepSeq_helper = e => {
-    e = force(e);
+const deepSeq_helper = async e => {
+    e = await e;
     if (isAttrs(e)) {
-        for (let i of e) deepSeq_helper(i);
+        await Promise.all(e.map(i => deepSeq_helper(i)));
     }
 };
+
+// async list helpers
+
+export type MaybePromiseList<T> = MaybePromise<MaybePromise<T>[]>;
+
+export let resolveList = async <T>(list: MaybePromiseList<T>): Promise<T[]> => await Promise.all(await list);
+
+async function transformAsyncList<I,R>(list: any, befres: (l: any[]) => MaybePromise<I>[], aftres: (l: I[]) => R[]): Promise<R[]> {
+    return aftres(await Promise.all(befres(tyforce_list(await list))));
+}
+
+export async function filterAsyncList<T>(list: MaybePromiseList<T>, f: (x: T) => MaybePromise<boolean>): Promise<T[]> {
+    let list2: Promise<[T, boolean]>[] = (await list).map(async (x: MaybePromise<T>): Promise<[T, boolean]> => {
+        // we need to await x here because the function f is expected
+        // to be pure and we don't want to waste any energy with
+        // settled Promise's.
+        let y = await x;
+        return [y, await f(y)];
+    });
+    return (await Promise.all(list2)).reduce((acc: T[], z: [T, boolean]): T[] => {
+        if (z[1]) acc.push(z[0]);
+        return acc;
+    }, []);
+}
+
+export async function sortAsyncList<T>(list: MaybePromiseList<T>, comp: (a: T, b: T) => MaybePromise<boolean>): Promise<T[]> {
+    comp = await comp;
+    let list_: T[] = await Promise.all(tyforce_list(await list));
+    // precompute comparator results
+    let mtx: number[][] = await Promise.all(list_.map(async (a, ax) =>
+        await Promise.all(list_.filter((dummy, bx) => bx < ax).map(async b => {
+            if (await comp(a, b)) {
+                return -1;
+            } else if (await comp(b, a)) {
+                return 1;
+            } else {
+                return 0;
+            }
+        }))
+    ));
+    // apply them
+    return list_
+        .map((i, ix): [T, number] => [i, ix])
+        .sort(([a,ax],[b,bx]) => (bx < ax) ? mtx[ax][bx] : (-mtx[bx][ax]))
+        .map(([i, ix]: [T, number]): T => i);
+}
 
 /* @preserve
 anti-prototype pollution filter taken from npm package 'no-pollution'
@@ -269,13 +272,15 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
-const anti_pollution = e => fixObjectProto(JSON.parse(e.replace(new RegExp("(_|\\\\_|[\\\\u05fFx]+){2}proto(_|\\\\_|[\\\\u05fFx]+){2}(?=[\"']+[\\s:]+[{\"'])", 'g'), '__pollutants__')));
+const anti_pollution = (e:string): object => fixObjectProto(
+    JSON.parse(e.replace(new RegExp("(_|\\\\_|[\\\\u05fFx]+){2}proto(_|\\\\_|[\\\\u05fFx]+){2}(?=[\"']+[\\s:]+[{\"'])", 'g'), '__pollutants__'))
+);
 
 const nixToStringHandler = {
-    'object': function(x) {
+    'object': async function(x: object): Promise<string> {
         // TODO: handle paths
         // "A list, in which case the string representations of its elements are joined with spaces."
-        if (x instanceof Array) return x.map(nixToString).join(' ');
+        if (x instanceof Array) return (await Promise.all(x.map(nixToString))).join(' ');
         if ('toString' in x) return x.toString();
         if ('__toString' in x) return x['__toString'](x);
         if ('outPath' in x) return x['outPath'];
@@ -287,13 +292,13 @@ const nixToStringHandler = {
     'boolean': x => x ? "1" : "",
 };
 
-function nixToString(x): string {
-    x = force(x);
+async function nixToString(x: any): Promise<string> {
+    x = await x;
     if (x === null || x === undefined) return "";
     if (typeof x === 'object' && 'valueOf' in x)
         x = x.valueOf();
     if (nixToStringHandler.hasOwnProperty(typeof x)) {
-        return nixToStringHandler[typeof x](x);
+        return await nixToStringHandler[typeof x](x);
     }
     throw new NixEvalError('nixToString: unserializable type ' + typeof x);
 }
@@ -308,10 +313,10 @@ const nixTypeOf = {
 
 // operators
 export const nixOp = {
-    u_Invert: a => !force(a),
-    u_Negate: a => -force(a),
-    _deepMerge: function(attrs_: object, value: any, ...path: string[]): void {
-        let attrs = attrs_;
+    u_Invert: async a => !(await a),
+    u_Negate: async a => -(await a),
+    _deepMerge: async function(attrs_: object | Promise<object>, value: any, ...path: string[]): Promise<void> {
+        let attrs = await attrs_;
         while(1) {
             let pfi = path.shift();
             if (pfi === undefined) {
@@ -332,115 +337,127 @@ export const nixOp = {
             }
         }
     },
-    _lambdaA2chk: function(attrs: object, key: string): any {
+    _lambdaA2chk: async function(attrs: object | Promise<object>, key: string): Promise<any> {
+        attrs = await attrs;
         if (attrs[key] === undefined) {
             // TODO: adjust error message to what Nix currently issues.
             throw new NixEvalError("Attrset element " + key + "missing at lambda call");
         }
         return attrs[key];
     },
-    Concat: binop_helper("operator ++", function(a, b) {
+    Concat: binop_helper("operator ++", function(a: any[], b: any[]) {
         if (typeof a !== 'object') {
             throw TypeError("operator ++: invalid input type (" + typeof a + ")");
         }
         return a.concat(b);
     }),
     // IsSet is implemented via .hasOwnProperty
-    Update: binop_helper("operator //", function(a, b) {
+    Update: binop_helper("operator //", function(a: object, b: object) {
         if (typeof a !== 'object') {
             throw TypeError("operator //: invalid input type (" + typeof a + ")");
         }
         return fixObjectProto({}, a, b);
     }),
-    Add: binop_helper("+", function(a, b) {
-        return a + b;
+    Add: binop_helper("+", function<T>(a: T, b: T) {
+        if(typeof a === 'number') {
+            return a + ((b as any) as number);
+        } else if(typeof a === 'string') {
+            return a + ((b as any) as string);
+        } else {
+            throw TypeError("operator +: invalid input type (" + typeof a + ")");
+        }
     }),
-    Sub: binop_helper("-", function(a, b) {
-        req_type("-", a, "number");
-        return a - b;
+    Sub: binop_helper("-", function<T>(a: T, b: T) {
+        let [c, d] = req_number("-", a, b);
+        return c - d;
     }),
-    Mul: binop_helper("*", function(a, b) {
-        req_type("*", a, "number");
-        return a * b;
+    Mul: binop_helper("*", function<T>(a: T, b: T) {
+        let [c, d] = req_number("*", a, b);
+        return c * d;
     }),
-    Div: binop_helper("/", function(a, b) {
-        req_type("/", a, "number");
-        if (!b) {
+    Div: binop_helper("/", function<T>(a: T, b: T) {
+        let [c, d] = req_number("/", a, b);
+        if (!d) {
             throw RangeError('Division by zero');
         }
-        return a / b;
+        return c / d;
     }),
-    And: binop_helper("&&", function(a, b) {
-        req_type("&&", a, "boolean");
-        return a && b;
+    And: binop_helper("&&", function<T>(a: T, b: T) {
+        let [c, d] = req_boolean("&&", a, b);
+        return c && d;
     }),
-    Implication: binop_helper("->", function(a, b) {
-        req_type("->", a, "boolean");
+    Implication: binop_helper("->", function<T>(a: T, b: T) {
+        req_boolean("->", a, b);
         return (!a) || b;
     }),
-    Or: binop_helper("||", function(a, b) {
-        req_type("||", a, "boolean");
+    Or: binop_helper("||", function<T>(a: T, b: T) {
+        req_boolean("||", a, b);
         return a || b;
     }),
-    Equal: (a, b) => _.isEqual(force(a), force(b)),
-    NotEqual: (a, b) => !_.isEqual(force(a), force(b)),
-    Less: binop_helper("<", function(a, b) {
-        req_type("<", a, "number");
+    Equal: async (a, b) => _.isEqual(await a, await b),
+    NotEqual: async (a, b) => !_.isEqual(await a, await b),
+    Less: binop_helper("<", function<T>(a: T, b: T) {
+        req_number("<", a, b);
         return a < b;
     }),
-    LessOrEq: binop_helper("<=", function(a, b) {
-        req_type("<=", a, "number");
+    LessOrEq: binop_helper("<=", function<T>(a: T, b: T) {
+        req_number("<=", a, b);
         return a <= b;
     }),
-    More: binop_helper(">", function(a, b) {
-        req_type(">", a, "number");
+    More: binop_helper(">", function<T>(a: T, b: T) {
+        req_number(">", a, b);
         return a > b;
     }),
-    MoreOrEq: binop_helper(">=", function(a, b) {
-        req_type(">=", a, "number");
+    MoreOrEq: binop_helper(">=", function<T>(a: T, b: T) {
+        req_number(">=", a, b);
         return a >= b;
     })
 };
 
 export function initRtDep(nixRt) {
     return {
-        abort: s => {throw new NixAbortError(tyforce_string(s));},
-        add: a => function(c) {
-            let b = force(a);
-            let d = force(c);
+        abort: async s => { throw new NixAbortError(tyforce_string(await s)); },
+        add: a => async function(b) {
+            a = await a;
+            b = await b;
+            let ta = typeof a;
             let tb = typeof b;
-            let td = typeof d;
-            if (tb === td) {
-                req_type("builtins.add", b, "number");
-                return b + d;
+            if (ta !== tb) {
+                throw TypeError("builtins.add: given types mismatch (" + ta + " != " + tb + ")");
+            } else if (ta === 'number') {
+                return a + b;
             } else {
-                throw TypeError("builtins.add: given types mismatch (" + tb + " != " + td + ")");
+                throw TypeError("builtins.add: invalid input type (" + ta + "), expected (number)");
             }
         },
-        all: pred => list => Array.prototype.every.call(force(list), x=>force(force(pred)(x))),
-        any: pred => list => Array.prototype.some.call (force(list), x=>force(force(pred)(x))),
-        assert: function(cond) {
-            const cond2 = force(cond);
+        all: pred => async list => (await Promise.all(tyforce_list(await list).map(pred))).every(x => x),
+        any: pred => async list => (await Promise.all(tyforce_list(await list).map(pred))).some(x => x),
+        assert: async cond => {
+            if (typeof cond === 'function') {
+                // async functions are still functions
+                cond = cond();
+            }
+            const cond2 = await cond;
             if (typeof cond2 !== 'boolean') {
                 throw TypeError("Assertion condition has wrong type (" + typeof cond2 + ")");
             }
             assert (cond2);
         },
-        attrNames:  aset => Object.keys(force(aset)).sort(),
-        attrValues: aset => Object.entries(force(aset)).sort().map(a => a[1]),
-        baseNameOf: s => _.last(tyforce_string(s).split('/')),
-        bitAnd: v1 => v2 => tyforce_number(v1) & tyforce_number(v2),
-        bitOr:  v1 => v2 => tyforce_number(v1) | tyforce_number(v2),
-        catAttrs: s => list => {
-            const s2 = tyforce_string(s);
-            return tyforce_list(list)
+        attrNames:  async aset => Object.keys(await aset).sort(),
+        attrValues: async aset => Object.entries(await aset).sort().map(a => a[1]),
+        baseNameOf: async s => _.last(tyforce_string(await s).split('/')),
+        bitAnd: v1 => async v2 => tyforce_number(await v1) & tyforce_number(await v2),
+        bitOr:  v1 => async v2 => tyforce_number(await v1) | tyforce_number(await v2),
+        catAttrs: s => async list => {
+            const s2 = tyforce_string(await s);
+            return (await resolveList(tyforce_list(await list)))
                 .filter(aset => Object.prototype.hasOwnProperty.call(aset, s2))
                 .map(aset => aset[s2]);
         },
-        ceil: n => Math.ceil(tyforce_number(n)),
-        compareVersions: s1 => s2 => {
-            let s1p = splitVersion(tyforce_string(s1));
-            let s2p = splitVersion(tyforce_string(s2));
+        ceil: async n => Math.ceil(tyforce_number(await n)),
+        compareVersions: s1 => async s2 => {
+            let s1p = splitVersion(tyforce_string(await s1));
+            let s2p = splitVersion(tyforce_string(await s2));
             let ret = _.zip(s1p, s2p).map(([a,b]) => {
                 if (a === b) return 0;
                 const ina = a && a.match(/^[0-9]+$/g) !== null;
@@ -457,26 +474,29 @@ export function initRtDep(nixRt) {
             }).find(x => (x !== undefined) && (x !== 0));
             return (ret !== undefined) ? ret : 0;
         },
-        concatLists: lists => tyforce_list(lists).flat(),
-        concatMap: f => lists => tyforce_list(lists).map(f).flat(),
-        concatStringsSep: sep => list => tyforce_list(list).join(tyforce_string(sep)),
-        deepSeq: e1 => e2 => { deepSeq_helper(e1); return e2; },
-        dirOf: s => {
-            let tmp = tyforce_string(s).split('/');
+        concatLists:            async lists => await transformAsyncList(lists, x=>x, x=>x.flat()),
+        concatMap:         f => async lists => await transformAsyncList(lists, x=>x.map(f), x=>x.flat()),
+        concatStringsSep: sep => async list => (await resolveList(tyforce_list(await list))).join(tyforce_string(await sep)),
+        deepSeq: async e1 => {
+            await deepSeq_helper(e1);
+            return e2 => e2;
+        },
+        dirOf: async s => {
+            let tmp = tyforce_string(await s).split('/');
             tmp.pop();
             return tmp.join('/');
         },
-        div: a => b => {
-            const bx = tyforce_number(b);
+        div: a => async b => {
+            const bx = tyforce_number(await b);
             // TODO: integer division?
             if (!bx) {
                 throw RangeError('Division by zero');
             }
-            return tyforce_number(a) / bx;
+            return tyforce_number(await a) / bx;
         },
-        elem: x => xs => tyforce_list(xs).includes(x),
-        elemAt: xs => n => {
-            let tmp = tyforce_list(xs)[tyforce_number(n)];
+        elem: x => async xs => (await Promise.all(tyforce_list(await xs))).includes(await x),
+        elemAt: xs => async n => {
+            let tmp = await tyforce_list(await xs)[tyforce_number(await n)];
             if (tmp === undefined) {
                 throw RangeError('Index out of range');
             }
@@ -484,23 +504,23 @@ export function initRtDep(nixRt) {
         },
 
         // omitted: fetchGit, fetchTarball, fetchurl
-        filter: f => list => tyforce_list(list).filter(f),
+        filter: f => async list => await filterAsyncList(tyforce_list(await list), await f),
         // omitted: filterSource
-        floor: n => Math.floor(tyforce_number(n)),
-        "foldl'": op => nul => list => tyforce_list(list).reduce(force(op), force(nul)),
-        fromJSON: e => anti_pollution(tyforce_string(e)),
+        floor: async n => Math.floor(tyforce_number(await n)),
+        "foldl'": op => nul => async list => tyforce_list(await list).reduce(await op, nul),
+        fromJSON: async e => anti_pollution(tyforce_string(await e)),
 
         // TODO: functionArgs -- requires nix2js/lib.rs modification
 
-        genList: gen_ => len => Array({length: tyforce_number(len)}, (dummy, i) => gen_(i)),
-        getEnv: s => ((typeof process !== 'undefined') && (typeof process.env !== 'undefined'))
-                ? process.env[tyforce_string(s)] : "",
-        groupBy: f => list => _.groupBy(tyforce_list(list), force(f)),
+        genList: gen_ => async len => Array({length: tyforce_number(await len)}, (dummy, i) => gen_(i)),
+        getEnv: async s => ((typeof process !== 'undefined') && (typeof process.env !== 'undefined'))
+                ? process.env[tyforce_string(await s)] : "",
+        groupBy: f => async list => _.groupBy(tyforce_list(await list), await f),
 
-        hasAttr: s => aset => Object.prototype.hasOwnProperty.call(force(aset), tyforce_string(s)),
+        hasAttr: s => async aset => Object.prototype.hasOwnProperty.call(await aset, tyforce_string(await s)),
         // omitted: hashFile, hashString
-        head: list => {
-            list = tyforce_list(list);
+        head: async list => {
+            list = tyforce_list(await list);
             if (!list.length) {
                 throw RangeError('builtins.head called on empty list');
             }
@@ -510,72 +530,78 @@ export function initRtDep(nixRt) {
         // omitted: import
 
         // ref: https://stackoverflow.com/a/1885569
-        intersectAttrs: e1 => e2 => {
-            let e2k = Object.keys(force(e2));
+        intersectAttrs: e1 => async e2 => {
+            let e2k = Object.keys(await e2);
             // "value => ... includes(value)" is necessary to avoid TypeErrors
-            return Object.keys(force(e1)).filter(value => e2k.includes(value)).filter(onlyUnique);
+            return Object.keys(await e1).filter(value => e2k.includes(value)).filter(onlyUnique);
         },
 
-        isAttrs: e => isAttrs(force(e)),
-        isBool:  e => isBool(force(e)),
-        isFloat: e => isNumber(force(e)),
-        isFunction: e => force(e) instanceof Function,
-        isInt:   e => typeof force(e) === 'bigint',
-        isList:  e => force(e) instanceof Array,
+        isAttrs:    async e => isAttrs(await e),
+        isBool:     async e => isBool(await e),
+        isFloat:    async e => isNumber(await e),
+        isFunction: async e => (await e) instanceof Function,
+        isInt:      async e => typeof (await e) === 'bigint',
+        isList:     async e => (await e) instanceof Array,
 
         // DEPRECATED
-        isNull:  e => force(e) === null,
+        isNull:     async e => (await e) === null,
 
         // TODO: isPath
 
-        isString: e => isString(force(e)),
+        isString:   async e => isString(await e),
 
-        length: e => tyforce_list(e).length,
-        lessThan: e1 => e2 => tyforce_number(e1) < tyforce_number(e2),
+        length: async e => tyforce_list(await e).length,
+        lessThan: e1 => async e2 => tyforce_number(await e1) < tyforce_number(await e2),
 
-        listToAttrs: list => fixObjectProto(
-            Object.fromEntries(tyforce_list(list).map(ent => [ent.name, ent.value]))
+        listToAttrs: async list => fixObjectProto(
+            Object.fromEntries(await Promise.all(tyforce_list(await list).map(async ent => {
+                ent = await ent;
+                return [ent.name, ent.value];
+            })))
         ),
 
-        map: f => list => tyforce_list(list).map(force(f)),
+        map: f => async list => tyforce_list(await list).map(await f),
         // ref: https://stackoverflow.com/a/14810722
-        mapAttrs: f => aset => fixObjectProto(
-            Object.fromEntries(Object.entries(force(aset)).map(([k, v]) => [k, f(k)(v)]))
+        mapAttrs: f => async (aset: MaybePromise<object>) => fixObjectProto(
+            Object.fromEntries(Object.entries(await aset).map(([k, v]) => [k, (async (k_, v_) => await (await f(k))(v))(k, v)]))
         ),
 
         // TODO: `match`, maybe via compiling the original `prim_match` to webassembly
 
-        mul: a => b => tyforce_number(a) * tyforce_number(b),
+        mul: a => async b => tyforce_number(await a) * tyforce_number(await b),
 
-        parseDrvName: s => {
-            let [name, version] = tyforce_string(s).split('-', 2);
+        parseDrvName: async s => {
+            let [name, version] = tyforce_string(await s).split('-', 2);
             return fixObjectProto({ name, version });
         },
-        partition: pred => list => {
-            let [right, wrong] = _.partition(tyforce_list(list), force(pred));
+        partition: pred => async list => {
+            // no need to resolve the list, the predicate can handle that
+            let [right, wrong] = _.partition(tyforce_list(await list), await pred);
             return fixObjectProto({ right, wrong });
         },
 
         // TODO: path, pathExists, placeholder
         // omitted: readDir, readFile
 
-        removeAttrs: aset => list => {
+        removeAttrs: aset => async list => {
             // make sure that we don't override the original object
-            let aset2 = fixObjectProto(force(aset));
-            for (const key of tyforce_list(list)) {
-                delete aset2[key];
+            let aset2 = fixObjectProto(await aset);
+            for (const key of tyforce_list(await list)) {
+                delete aset2[await key];
             }
             return aset2;
         },
 
         // ref: https://stackoverflow.com/a/67337940
-        replaceStrings: from => to => s => {
-            let entries = Object.entries(_.zip(from, to));
+        replaceStrings: from_ => to => async s => {
+            let from__ = await resolveList(tyforce_list(from_));
+            let   to__ = await resolveList(tyforce_list(to));
+            let entries = Object.entries(_.zip(from_, to));
             return entries.reduce(
                     // Replace all the occurrences of the keys in the text into an index placholder using split-join
                     (_str, [key], i) => _str.split(key).join(`{${i}}`),
                     // Manipulate all exisitng index placeholder -like formats, in order to prevent confusion
-                    s.replace(/\{(?=\d+\})/g, '{-')
+                    (await s).replace(/\{(?=\d+\})/g, '{-')
                 )
                 // Replace all index placeholders to the desired replacement values
                 .replace(/\{(\d+)\}/g, (_,i) => entries[i][1])
@@ -583,57 +609,44 @@ export function initRtDep(nixRt) {
                 .replace(/\{-(?=\d+\})/g, '{');
         },
 
-        seq: e1 => {
-            if (e1 instanceof Lazy) {
-                e1.evaluate();
-            }
-            return e2 => force(e2);
+        seq: async e1 => {
+            await e1;
+            return e2 => e2;
         },
 
-        sort: comp => list => {
-            let compx = force(comp);
-            return tyforce_list(list).sort(a => b => {
-                if (force(compx(a, b))) {
-                    return -1;
-                }
-                if (force(compx(b, a))) {
-                    return 1;
-                }
-                return 0;
-            });
-        },
+        sort: comp => async list => sortAsyncList(list, await comp),
 
         // TODO: `split`, see also: `match`
 
-        splitVersion: s => splitVersion(tyforce_string(s)),
+        splitVersion: async s => splitVersion(tyforce_string(await s)),
 
         // omitted: storePath
 
-        stringLength: s => tyforce_string(s).length,
+        stringLength: async s => tyforce_string(await s).length,
 
-        tail: list => tyforce_list(list).slice(1),
+        tail: async list => tyforce_list(await list).slice(1),
 
-        throw: s => {throw new NixEvalError(tyforce_string(s));},
+        throw: async s => { throw new NixEvalError(tyforce_string(await s)); },
 
         // TODO: toFile, via store interaction or derivation; weird stuff
 
         // TODO: handle derivations
-        toJSON: x => JSON.stringify(force(x)),
+        toJSON: async x => JSON.stringify(await x),
 
         // omitted: toPath; also DEPRECATED
 
-        // NOTE: we `force` in `nixToString`, because it recurses
+        // NOTE: we `await` in `nixToString`, because it recurses
         'toString': nixToString,
 
         // TODO: toXML
 
         trace: e1 => e2 => { console.debug(e1); return e2; },
 
-        tryEval: e => {
+        tryEval: async e => {
             let success = false;
             let value = false;
             try {
-                value = force(e);
+                value = await e;
                 success = true;
             } catch(e) {
                 if (!(typeof e === 'object' && e instanceof NixEvalError))
@@ -644,8 +657,8 @@ export function initRtDep(nixRt) {
             return fixObjectProto({ value, success });
         },
 
-        typeOf: e => {
-            e = force(e);
+        typeOf: async e => {
+            e = await e;
             if (e === null) return "null";
             // need to differentiate this with `null` because of distinction via `isNull`,
             // and `isNull` deprecation.

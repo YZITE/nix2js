@@ -2,6 +2,7 @@
 *.js.map
 *.min.js
 *.tgz
+.#*
 flamegraph.svg
 nix-builtins/index.js
 node_modules

@@ -1,12 +1,12 @@
 import { spawn } from 'child_process';
-import * as fs from 'fs/promises';
-import * as gulp from 'gulp';
+import fs from 'fs/promises';
+import gulp from 'gulp';
 import ts from 'gulp-typescript';
 import merge from 'merge-stream';
 
 let tsProject = ts.createProject('tsconfig.json');
 
-gulp.task('compile', (cb) => {
+let compile_rust = (cb) => {
     let rustwasm = spawn("wasm-pack", ["build", "--target", "nodejs"], {
         'cwd': 'wasm',
         'stdio': 'inherit',
@@ -21,10 +21,17 @@ gulp.task('compile', (cb) => {
             cb(new Error('wasm-pack failed'));
         }
     });
+};
+gulp.task('compile-rust', compile_rust);
+
+let compile_ts = () => {
     let tsres = tsProject.src().pipe(tsProject());
     return merge(tsres.dts, tsres.js)
         .pipe(gulp.dest("nix-builtins"));
-});
+};
+gulp.task('compile-ts', compile_ts);
+
+gulp.task('compile', gulp.parallel(compile_rust, compile_ts))
 
 gulp.task('gignsort', async () => {
     let content = await fs.readFile('.gitignore', 'utf8');

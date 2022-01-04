@@ -1,4 +1,4 @@
-import { Lazy, force, initRtDep, allKeys, extractScope, mkScope, mkScopeWith, ScopeError, nixOp } from "./index.js";
+import { initRtDep, allKeys, extractScope, mkScope, mkScopeWith, ScopeError, nixOp } from "./index.js";
 import { isEqual } from 'lodash-es';
 import assert from 'webassert';
 
@@ -11,74 +11,6 @@ function assert_eq(a, b, msg) {
 }
 
 let xblti = initRtDep({});
-
-describe('Lazy', function() {
-    it('should be lazy', function() {
-        let ref = mkMut(0);
-        let lobj = new Lazy(function() {
-            ref.i += 1;
-            return ref.i;
-        });
-        assert_eq(lobj.evaluate(), 1, "1st");
-        assert_eq(lobj.evaluate(), 1, "2nd");
-        assert_eq(lobj.evaluate(), 1, "3rd");
-    });
-
-    it('should recurse/unfold', function() {
-        let ref = mkMut(0);
-        let lobj = new Lazy(function() {
-            ref.i += 1;
-            return new Lazy(function() {
-                ref.i += 1;
-                return ref.i;
-            });
-        });
-        assert_eq(lobj.evaluate(), 2, "1st");
-        assert_eq(lobj.evaluate(), 2, "2nd");
-        assert_eq(lobj.evaluate(), 2, "3rd");
-    });
-
-    it('automatic dereference should work', function() {
-        let ref = mkMut(0);
-        let lobj = new Lazy(function() {
-            ref.i += 1;
-            return {
-                a: 1,
-                b: 2,
-            };
-        });
-        assert_eq(ref.i, 0, "(0)");
-        assert_eq(lobj['a'], 1, "(1)");
-        assert_eq(ref.i, 1, "(1i)");
-        assert_eq(lobj['b'], 2, "(2)");
-        assert_eq(ref.i, 1, "(2i)");
-        assert_eq(lobj['c'], undefined, "(3)");
-        assert_eq(ref.i, 1, "(3i)");
-    });
-});
-
-describe('force', function() {
-    it('should work on Lazy', function() {
-        let ref = mkMut(0);
-        let lobj = new Lazy(function() {
-            ref.i += 1;
-            return ref.i;
-        });
-        assert_eq(force(lobj), 1, "1st");
-        assert_eq(force(lobj), 1, "2nd");
-    });
-    it('should work on primitives', function() {
-        assert_eq(force(0), 0, "integer");
-        assert_eq(force(0.0), 0.0, "float");
-        assert_eq(force(""), "", "string");
-        assert_eq(force("fshjdö"), "fshjdö", "string (2)");
-    });
-    it('shouldn\'t be tripped by iL in objects', function() {
-        let tmpo = { iL: true };
-        let tmpo2 = { iL: true };
-        assert_eq(force(tmpo), tmpo2, "tripped by iL");
-    });
-});
 
 describe('mkScope', function() {
     it('should work standalone', function() {
@@ -157,33 +89,33 @@ describe('mkScopeWith', function() {
 });
 
 describe('add', function() {
-    it('should work if arguments are correct', function() {
-        assert_eq(xblti.add(1200)(567), 1767, "integer");
-        assert_eq(xblti.add(-100)(567), 467, "integer (2)");
-        assert_eq(xblti.add(203)(-500), -297, "integer (3)");
+    it('should work if arguments are correct', async function() {
+        assert_eq(await xblti.add(1200)(567), 1767, "integer");
+        assert_eq(await xblti.add(-100)(567), 467, "integer (2)");
+        assert_eq(await xblti.add(203)(-500), -297, "integer (3)");
     });
     describe('should report errors correctly', function() {
-        it("string/string", function() {
+        it("string/string", async function() {
             try {
-                console.log(xblti.add("ab")("cde"));
+                console.log(await xblti.add("ab")("cde"));
                 assert(false, "unreachable");
             } catch(e) {
                 assert(e instanceof TypeError, "error kind");
                 assert_eq(e.message, "builtins.add: invalid input type (string), expected (number)", "message");
             }
         });
-        it("int/string", function() {
+        it("int/string", async function() {
             try {
-                console.log(xblti.add(0)("oops"));
+                console.log(await xblti.add(0)("oops"));
                 assert(false, "unreachable");
             } catch(e) {
                 assert(e instanceof TypeError, "error kind");
                 assert_eq(e.message, "builtins.add: given types mismatch (number != string)", "message");
             }
         });
-        it("string/int", function() {
+        it("string/int", async function() {
             try {
-                console.log(xblti.add("oops")(0));
+                console.log(await xblti.add("oops")(0));
                 assert(false, "unreachable");
             } catch(e) {
                 assert(e instanceof TypeError, "error kind");
@@ -194,49 +126,49 @@ describe('add', function() {
 });
 
 describe('compareVersions', function() {
-    it('should work for simple cases', function() {
-        assert_eq(xblti.compareVersions("1.0")("2.3"), -1, "(1)");
-        assert_eq(xblti.compareVersions("2.3")("1.0"), 1, "(2)");
-        assert_eq(xblti.compareVersions("2.1")("2.3"), -1, "(3)");
-        assert_eq(xblti.compareVersions("2.3")("2.3"), 0, "(4)");
-        assert_eq(xblti.compareVersions("2.5")("2.3"), 1, "(5)");
-        assert_eq(xblti.compareVersions("3.1")("2.3"), 1, "(6)");
+    it('should work for simple cases', async function() {
+        assert_eq(await xblti.compareVersions("1.0")("2.3"), -1, "(1)");
+        assert_eq(await xblti.compareVersions("2.3")("1.0"), 1, "(2)");
+        assert_eq(await xblti.compareVersions("2.1")("2.3"), -1, "(3)");
+        assert_eq(await xblti.compareVersions("2.3")("2.3"), 0, "(4)");
+        assert_eq(await xblti.compareVersions("2.5")("2.3"), 1, "(5)");
+        assert_eq(await xblti.compareVersions("3.1")("2.3"), 1, "(6)");
     });
-    it('should work for complex cases', function() {
-        assert_eq(xblti.compareVersions("2.3.1")("2.3"), 1, "(7)");
-        assert_eq(xblti.compareVersions("2.3.1")("2.3a"), 1, "(8)");
-        assert_eq(xblti.compareVersions("2.3pre1")("2.3"), -1, "(9)");
-        assert_eq(xblti.compareVersions("2.3")("2.3pre1"), 1, "(10)");
-        assert_eq(xblti.compareVersions("2.3pre3")("2.3pre12"), -1, "(11)");
-        assert_eq(xblti.compareVersions("2.3pre12")("2.3pre3"), 1, "(12)");
-        assert_eq(xblti.compareVersions("2.3a")("2.3c"), -1, "(13)");
-        assert_eq(xblti.compareVersions("2.3c")("2.3a"), 1, "(14)");
-        assert_eq(xblti.compareVersions("2.3pre1")("2.3c"), -1, "(15)");
-        assert_eq(xblti.compareVersions("2.3pre1")("2.3q"), -1, "(16)");
-        assert_eq(xblti.compareVersions("2.3q")("2.3pre1"), 1, "(17)");
+    it('should work for complex cases', async function() {
+        assert_eq(await xblti.compareVersions("2.3.1")("2.3"), 1, "(7)");
+        assert_eq(await xblti.compareVersions("2.3.1")("2.3a"), 1, "(8)");
+        assert_eq(await xblti.compareVersions("2.3pre1")("2.3"), -1, "(9)");
+        assert_eq(await xblti.compareVersions("2.3")("2.3pre1"), 1, "(10)");
+        assert_eq(await xblti.compareVersions("2.3pre3")("2.3pre12"), -1, "(11)");
+        assert_eq(await xblti.compareVersions("2.3pre12")("2.3pre3"), 1, "(12)");
+        assert_eq(await xblti.compareVersions("2.3a")("2.3c"), -1, "(13)");
+        assert_eq(await xblti.compareVersions("2.3c")("2.3a"), 1, "(14)");
+        assert_eq(await xblti.compareVersions("2.3pre1")("2.3c"), -1, "(15)");
+        assert_eq(await xblti.compareVersions("2.3pre1")("2.3q"), -1, "(16)");
+        assert_eq(await xblti.compareVersions("2.3q")("2.3pre1"), 1, "(17)");
     });
 })
 
 describe('+', function() {
-    it('should work if arguments are correct', function() {
-        assert_eq(nixOp.Add(1200, 567), 1767, "integer");
-        assert_eq(nixOp.Add(-100, 567), 467, "integer (2)");
-        assert_eq(nixOp.Add(203, -500), -297, "integer (3)");
-        assert_eq(nixOp.Add("ab", "cde"), "abcde", "string");
+    it('should work if arguments are correct', async function() {
+        assert_eq(await nixOp.Add(1200, 567), 1767, "integer");
+        assert_eq(await nixOp.Add(-100, 567), 467, "integer (2)");
+        assert_eq(await nixOp.Add(203, -500), -297, "integer (3)");
+        assert_eq(await nixOp.Add("ab", "cde"), "abcde", "string");
     });
     describe('should report errors correctly', function() {
-        it("int/string", function() {
+        it("int/string", async function() {
             try {
-                console.log(nixOp.Add(0, "oops"));
+                console.log(await nixOp.Add(0, "oops"));
                 assert(false, "unreachable");
             } catch(e) {
                 assert(e instanceof TypeError, "error kind");
                 assert_eq(e.message, "operator +: given types mismatch (number != string)", "message");
             }
         });
-        it("string/int", function() {
+        it("string/int", async function() {
             try {
-                console.log(nixOp.Add("oops", 0));
+                console.log(await nixOp.Add("oops", 0));
                 assert(false, "unreachable");
             } catch(e) {
                 assert(e instanceof TypeError, "error kind");
@@ -246,29 +178,29 @@ describe('+', function() {
     });
 });
 
-it('-', function() {
-    assert_eq(nixOp.Sub(1200, 567), 633, "integer");
-    assert_eq(nixOp.Sub(-100, 567), -667, "integer (2)");
-    assert_eq(nixOp.Sub(203, -500), 703, "integer (3)");
+it('-', async function() {
+    assert_eq(await nixOp.Sub(1200, 567), 633, "integer");
+    assert_eq(await nixOp.Sub(-100, 567), -667, "integer (2)");
+    assert_eq(await nixOp.Sub(203, -500), 703, "integer (3)");
 });
 
-it('*', function() {
-    assert_eq(nixOp.Mul(50, 46), 2300, "integer");
-    assert_eq(nixOp.Mul(50004, 1023), 51154092, "integer (2)");
-    assert_eq(nixOp.Mul(203, -500), -101500, "integer (3)");
-    assert_eq(nixOp.Mul(-203, 500), -101500, "integer (4)");
-    assert_eq(nixOp.Mul(-203, -500), 101500, "integer (5)");
+it('*', async function() {
+    assert_eq(await nixOp.Mul(50, 46), 2300, "integer");
+    assert_eq(await nixOp.Mul(50004, 1023), 51154092, "integer (2)");
+    assert_eq(await nixOp.Mul(203, -500), -101500, "integer (3)");
+    assert_eq(await nixOp.Mul(-203, 500), -101500, "integer (4)");
+    assert_eq(await nixOp.Mul(-203, -500), 101500, "integer (5)");
 });
 
 describe('/', function() {
-    it('should work if arguments are correct', function() {
-        assert_eq(nixOp.Div(1, 1), 1, "integer");
-        assert_eq(nixOp.Div(8, 4), 2, "integer (2)");
-        assert_eq(nixOp.Div(754677, 1331), 567, "integer (3)");
+    it('should work if arguments are correct', async function() {
+        assert_eq(await nixOp.Div(1, 1), 1, "integer");
+        assert_eq(await nixOp.Div(8, 4), 2, "integer (2)");
+        assert_eq(await nixOp.Div(754677, 1331), 567, "integer (3)");
     });
-    it('should catch division-by-zero', function() {
+    it('should catch division-by-zero', async function() {
         try {
-            console.log(nixOp.Div(1, 0));
+            console.log(await nixOp.Div(1, 0));
             assert(false, "unreachable");
         } catch(e) {
             assert(e instanceof RangeError, "error kind");
@@ -278,21 +210,21 @@ describe('/', function() {
 });
 
 describe('//', function() {
-    it('should merge distinct attrsets correctly', function() {
-        assert_eq(nixOp.Update({a: 1}, {b:2}), {a:1, b:2});
+    it('should merge distinct attrsets correctly', async function() {
+        assert_eq(await nixOp.Update({a: 1}, {b:2}), {a:1, b:2});
     });
-    it('should merge overlapping attrsets correctly', function() {
+    it('should merge overlapping attrsets correctly', async function() {
         let a = {a: {i: 0}};
         let b = {a: {i: 2}};
-        assert_eq(nixOp.Update(a, b), {a: {i: 2}}, "//");
+        assert_eq(await nixOp.Update(a, b), {a: {i: 2}}, "//");
         assert_eq(a, {a: {i: 0}}, "original objects shouldn't be modified");
     });
 });
 
-it('==', function() {
-    assert_eq(nixOp.Equal(1, 1), true);
+it('==', async function() {
+    assert_eq(await nixOp.Equal(1, 1), true);
 });
 
-it('!=', function() {
-    assert_eq(nixOp.NotEqual(1, 1), false);
+it('!=', async function() {
+    assert_eq(await nixOp.NotEqual(1, 1), false);
 });
