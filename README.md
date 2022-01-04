@@ -38,3 +38,5 @@ let b = a({localSystem:'x86_64-linux'}).evaluate();
 - nested attrset keys and non-recursive attrsets are implemented suboptimally
 - implement missing nix builtins (esp. those marked with `TODO:`)
   - `derivation` should create an object with a `realise` method
+- reduce the call stack size and investigate the use of `Promise` in JS.
+- Promise's are incompatible with the current use of `force`...
