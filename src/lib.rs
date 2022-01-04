@@ -2,10 +2,6 @@
  this crate converts Nix code into javascript code, and generates code
  which is wrapped inside a function which expects a "runtime" object,
  which should contain the following methods:
- - `throw(message)`: throws a javascript exception,
-    should automatically supply the correct file name
-    (triggered by `assert` and `throw` if hit)
- - `abort(message)`: like `throw`, but triggered by `abort` if hit
  - `realise(derivation_attrset)`: should realise a derivation
     (used e.g. for import-from-derivation, also gets linked onto derivations)
  - `export(anchor,path)`: export a path into the nix store

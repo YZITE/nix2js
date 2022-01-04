@@ -1,4 +1,4 @@
-import { Lazy, force, initRtDep, allKeys, extractScope, mkScope, mkScopeWith } from "./index.js";
+import { Lazy, force, initRtDep, allKeys, extractScope, mkScope, mkScopeWith, ScopeError } from "./index.js";
 import { isEqual } from 'lodash-es';
 import assert from 'webassert';
 
@@ -10,15 +10,7 @@ function assert_eq(a, b, msg) {
     }
 }
 
-class XpError {
-    constructor(message) {
-        this.message = message;
-    }
-}
-
-let instrum_blti = initRtDep({
-    throw: function(msg) { throw new XpError(msg); }
-});
+let instrum_blti = initRtDep({});
 
 describe('Lazy', function() {
     it('should be lazy', function() {
@@ -105,6 +97,22 @@ describe('mkScope', function() {
         assert_eq(sc[allKeys], ['a', 'b']);
     });
 
+    it('shouldn\'t allow direct modifications of prototype', function() {
+        let a = mkScope(null);
+        let sc = mkScope(a);
+        try {
+            assert_eq(sc['__proto__'], undefined, "(0)");
+            sc['__proto__'] = {x: 1};
+            assert_eq(a.x, undefined, "(1)");
+            assert_eq(sc.x, undefined, "(2)");
+            assert_eq(sc['__proto__'], {x:1}, "(3)");
+            assert_eq(Object.x, undefined, "(4)");
+        } catch(e) {
+            assert(e instanceof ScopeError, "error kind");
+            assert_eq(e.message, "Tried modifying prototype");
+        }
+    });
+
     it('should work recursively', function() {
         let sc1 = mkScope(null);
         let sc2 = mkScope(sc1);
@@ -127,7 +135,7 @@ describe('mkScopeWith', function() {
             sc['a'] = 2;
             assert(false, "unreachable");
         } catch(e) {
-            assert_eq(e.message, "tried overwriting key 'a' in read-only scope");
+            assert_eq(e.message, "Tried overwriting key 'a' in read-only scope", "error message");
         }
     });
 
@@ -140,7 +148,7 @@ describe('mkScopeWith', function() {
             sc2['x'] = 2;
             assert(false, "unreachable");
         } catch(e) {
-            assert_eq(e.message, "tried overwriting key 'x' in read-only scope", "error message");
+            assert_eq(e.message, "Tried overwriting key 'x' in read-only scope", "error message");
         }
         assert_eq(sc1[allKeys], ['x'], "(keys1)");
         assert_eq(sc2[allKeys], ['x'], "(keys2)");
@@ -162,7 +170,7 @@ describe('add', function() {
                 console.log(blti.add("ab")("cde"));
                 assert(false, "unreachable");
             } catch(e) {
-                assert(e instanceof XpError, "error kind");
+                assert(e instanceof TypeError, "error kind");
                 assert_eq(e.message, "builtins.add: invalid input type (string), expected (number)", "message");
             }
         });
@@ -172,7 +180,7 @@ describe('add', function() {
                 console.log(blti.add(0)("oops"));
                 assert(false, "unreachable");
             } catch(e) {
-                assert(e instanceof XpError, "error kind");
+                assert(e instanceof TypeError, "error kind");
                 assert_eq(e.message, "builtins.add: given types mismatch (number != string)", "message");
             }
         });
@@ -182,12 +190,38 @@ describe('add', function() {
                 console.log(blti.add("oops")(0));
                 assert(false, "unreachable");
             } catch(e) {
-                assert(e instanceof XpError, "error kind");
+                assert(e instanceof TypeError, "error kind");
                 assert_eq(e.message, "builtins.add: given types mismatch (string != number)", "message");
             }
         });
     });
 });
+
+describe('compareVersions', function() {
+    it('should work for simple cases', function() {
+        let blti = instrum_blti[0];
+        assert_eq(blti.compareVersions("1.0")("2.3"), -1, "(1)");
+        assert_eq(blti.compareVersions("2.3")("1.0"), 1, "(2)");
+        assert_eq(blti.compareVersions("2.1")("2.3"), -1, "(3)");
+        assert_eq(blti.compareVersions("2.3")("2.3"), 0, "(4)");
+        assert_eq(blti.compareVersions("2.5")("2.3"), 1, "(5)");
+        assert_eq(blti.compareVersions("3.1")("2.3"), 1, "(6)");
+    });
+    it('should work for complex cases', function() {
+        let blti = instrum_blti[0];
+        assert_eq(blti.compareVersions("2.3.1")("2.3"), 1, "(7)");
+        assert_eq(blti.compareVersions("2.3.1")("2.3a"), 1, "(8)");
+        assert_eq(blti.compareVersions("2.3pre1")("2.3"), -1, "(9)");
+        assert_eq(blti.compareVersions("2.3")("2.3pre1"), 1, "(10)");
+        assert_eq(blti.compareVersions("2.3pre3")("2.3pre12"), -1, "(11)");
+        assert_eq(blti.compareVersions("2.3pre12")("2.3pre3"), 1, "(12)");
+        assert_eq(blti.compareVersions("2.3a")("2.3c"), -1, "(13)");
+        assert_eq(blti.compareVersions("2.3c")("2.3a"), 1, "(14)");
+        assert_eq(blti.compareVersions("2.3pre1")("2.3c"), -1, "(15)");
+        assert_eq(blti.compareVersions("2.3pre1")("2.3q"), -1, "(16)");
+        assert_eq(blti.compareVersions("2.3q")("2.3pre1"), 1, "(17)");
+    });
+})
 
 describe('+', function() {
     it('should work if arguments are correct', function() {
@@ -204,7 +238,7 @@ describe('+', function() {
                 console.log(blti.Add(0, "oops"));
                 assert(false, "unreachable");
             } catch(e) {
-                assert(e instanceof XpError, "error kind");
+                assert(e instanceof TypeError, "error kind");
                 assert_eq(e.message, "operator +: given types mismatch (number != string)", "message");
             }
         });
@@ -214,7 +248,7 @@ describe('+', function() {
                 console.log(blti.Add("oops", 0));
                 assert(false, "unreachable");
             } catch(e) {
-                assert(e instanceof XpError, "error kind");
+                assert(e instanceof TypeError, "error kind");
                 assert_eq(e.message, "operator +: given types mismatch (string != number)", "message");
             }
         });
@@ -250,8 +284,8 @@ describe('/', function() {
             console.log(blti.Div(1, 0));
             assert(false, "unreachable");
         } catch(e) {
-            assert(e instanceof XpError, "error kind");
-            assert_eq(e.message, "operator /: division by zero", "message");
+            assert(e instanceof RangeError, "error kind");
+            assert_eq(e.message, "Division by zero", "message");
         }
     });
 });
