@@ -36,6 +36,7 @@ struct Context<'a> {
     inp: &'a str,
     acc: &'a mut String,
     vars: Vec<(String, ScopedVar)>,
+    lazyness_stack: Vec<bool>,
     names: &'a mut Vec<String>,
     mappings: &'a mut Vec<u8>,
     // tracking positions for offset calc
@@ -128,13 +129,7 @@ impl Context<'_> {
             .count()
     }
 
-    fn rtv(
-        &mut self,
-        txtrng: rnix::TextRange,
-        x: Option<NixNode>,
-        insert_lazy: bool,
-        desc: &str,
-    ) -> TranslateResult {
+    fn rtv(&mut self, txtrng: rnix::TextRange, x: Option<NixNode>, desc: &str) -> TranslateResult {
         match x {
             None => {
                 err!(format!(
@@ -143,30 +138,7 @@ impl Context<'_> {
                     desc
                 ));
             }
-            Some(x) => self.translate_node(x, insert_lazy),
-        }
-    }
-
-    fn translate_varname(&self, vn: &str) -> String {
-        use ScopedVar as Sv;
-        match vn {
-            "builtins" => NIX_BUILTINS_RT.to_string(),
-            "derivation" => {
-                // aliased name for derivation builtin
-                format!("{}.derivation", NIX_BUILTINS_RT)
-            }
-            "abort" | "import" | "throw" => {
-                format!("{}.{}", NIX_RUNTIME, vn)
-            }
-            "false" | "true" | "null" => vn.to_string(),
-            _ => match self.vars.iter().rev().find(|(ref i, _)| vn == i) {
-                Some((_, x)) => match x {
-                    // TODO: improve this
-                    Sv::LambdaArg => format!("{}{}", NIX_LAMBDA_ARG_PFX, vn.replace("-", "___")),
-                },
-                None if attrelem_raw_safe(vn) => format!("{}.{}", NIX_IN_SCOPE, vn),
-                None => format!("{}[{}]", NIX_IN_SCOPE, escape_str(vn)),
-            },
+            Some(x) => self.translate_node(x),
         }
     }
 
@@ -189,7 +161,7 @@ impl Context<'_> {
         let ret = if attrelem_raw_safe(id.as_str()) {
             format!(".{}", id.as_str())
         } else {
-            format!("[{}]", escape_str(&id.as_str()))
+            format!("[{}]", escape_str(id.as_str()))
         };
         self.push(&ret);
         self.snapshot_pos(txtrng.end(), is_ident);
@@ -201,10 +173,58 @@ impl Context<'_> {
         // if we don't make this conditional, we would record
         // scrambled identifiers otherwise...
         let is_ident = self.snapshot_pos(txtrng.start(), false).is_some();
-        let ret = self.translate_varname(id.as_str());
-        self.push(&ret);
+        let vn = id.as_str();
+
+        use ScopedVar as Sv;
+        let startpos = self.acc.len();
+        // needed to skip the lazy part for attrset access...
+        let mut ret = None;
+        match vn {
+            "builtins" => self.push(NIX_BUILTINS_RT),
+            "derivation" => {
+                // aliased name for derivation builtin
+                self.push(NIX_BUILTINS_RT);
+                self.push(".derivation");
+            }
+            "abort" | "import" | "throw" => {
+                self.push(NIX_RUNTIME);
+                self.push(".");
+                self.push(vn);
+            }
+            "false" | "true" | "null" => self.push(vn),
+            _ => match self.vars.iter().rev().find(|(ref i, _)| vn == i) {
+                Some((_, x)) => match x {
+                    // TODO: improve this
+                    Sv::LambdaArg => {
+                        self.push(NIX_LAMBDA_ARG_PFX);
+                        self.push(&vn.replace("-", "___"));
+                    }
+                },
+                None => {
+                    let omit_lazy = *self.lazyness_stack.last().unwrap_or(&false);
+                    if !omit_lazy {
+                        self.push(&format!("new {}(()=>", NIX_LAZY));
+                    }
+                    let startpos = self.acc.len();
+                    self.push(NIX_IN_SCOPE);
+                    self.push(&if attrelem_raw_safe(vn) {
+                        format!(".{}", vn)
+                    } else {
+                        format!("[{}]", escape_str(vn))
+                    });
+                    ret = Some(self.acc[startpos..].to_string());
+                    if !omit_lazy {
+                        self.push(")");
+                    }
+                }
+            },
+        }
         self.snapshot_pos(txtrng.end(), is_ident);
-        ret
+        if let Some(x) = ret {
+            x
+        } else {
+            self.acc[startpos..].to_string()
+        }
     }
 
     fn translate_node_key_element_force_str(&mut self, node: &NixNode) -> TranslateResult {
@@ -214,7 +234,7 @@ impl Context<'_> {
             self.push(&escape_str(name.as_str()));
             self.snapshot_pos(txtrng.end(), is_ident);
         } else {
-            self.translate_node(node.clone(), false)?;
+            self.translate_node(node.clone())?;
         }
         Ok(())
     }
@@ -224,7 +244,7 @@ impl Context<'_> {
             self.translate_node_ident_indexing(&name);
         } else {
             self.push("[");
-            self.translate_node(node.clone(), false)?;
+            self.translate_node(node.clone())?;
             self.push("]");
         }
         Ok(())
@@ -261,10 +281,10 @@ impl Context<'_> {
         };
 
         if kpr.is_empty() {
-            self.push(&format!("{}", scope));
+            self.push(scope);
             self.translate_node_key_element_indexing(&kpfi)?;
             self.push("=");
-            self.translate_node(value, true)?;
+            self.translate_node(value)?;
             self.push(";");
         } else {
             self.push(&format!(
@@ -280,7 +300,7 @@ impl Context<'_> {
             // parts of the attrset instead of round-tripping thru $`scope`.
             self.translate_node_key_element_indexing(&kpfi)?;
             self.push(",");
-            self.translate_node(value, true)?;
+            self.translate_node(value)?;
             for i in kpr {
                 self.push(",");
                 self.translate_node_key_element_force_str(&i)?;
@@ -291,17 +311,21 @@ impl Context<'_> {
     }
 
     fn translate_node_inherit(&mut self, inh: Inherit, scope: &str) -> TranslateResult {
+        // inherit may be used in self-referential attrsets,
+        // and omitting lazy there would be a bad idea.
+        self.lazyness_stack.push(true);
         if let Some(inhf) = inh.from() {
             let mut idents: Vec<_> = inh.idents().collect();
             if idents.len() == 1 {
                 let id = idents.remove(0);
                 self.push(scope);
                 self.translate_node_ident_indexing(&id);
-                self.push(&format!("=new {}(()=>(", NIX_LAZY));
+                self.push("=new ");
+                self.push(NIX_LAZY);
+                self.push("(()=>(");
                 self.rtv(
                     inhf.node().text_range(),
                     inhf.inner(),
-                    false,
                     "inner for inherit-from",
                 )?;
                 self.push(")");
@@ -314,7 +338,6 @@ impl Context<'_> {
                 self.rtv(
                     inhf.node().text_range(),
                     inhf.inner(),
-                    false,
                     "inner for inherit-from",
                 )?;
                 self.push(");");
@@ -338,6 +361,7 @@ impl Context<'_> {
                 self.push(";");
             }
         }
+        self.lazyness_stack.pop();
         Ok(())
     }
 
@@ -350,7 +374,7 @@ impl Context<'_> {
         if node.entries().next().is_none() && node.inherits().next().is_none() {
             // empty attrset
             match body {
-                LetBody::Nix(body) => self.translate_node(body, true)?,
+                LetBody::Nix(body) => self.translate_node(body)?,
                 LetBody::ExtractScope => self.push("Object.create(null)"),
             }
             return Ok(());
@@ -364,7 +388,7 @@ impl Context<'_> {
         }
         self.push("return ");
         match body {
-            LetBody::Nix(body) => self.translate_node(body, true)?,
+            LetBody::Nix(body) => self.translate_node(body)?,
             LetBody::ExtractScope => self.push(&format!("{}[{}]", scope, NIX_EXTRACT_SCOPE)),
         }
         self.push(";})(nixBlti.mkScope(");
@@ -375,7 +399,7 @@ impl Context<'_> {
         Ok(())
     }
 
-    fn translate_node(&mut self, node: NixNode, insert_lazy: bool) -> TranslateResult {
+    fn translate_node(&mut self, node: NixNode) -> TranslateResult {
         if node.kind().is_trivia() {
             return Ok(());
         }
@@ -394,17 +418,23 @@ impl Context<'_> {
         };
         use ParsedType as Pt;
 
+        let omit_lazy = *self.lazyness_stack.last().unwrap_or(&false);
+        self.lazyness_stack.push(false);
+
         match x {
             Pt::Apply(app) => {
-                if insert_lazy {
+                *self.lazyness_stack.last_mut().unwrap() = true;
+                if !omit_lazy {
                     self.push(&format!("new {}(()=>", NIX_LAZY));
                 }
                 self.push("(");
-                self.rtv(txtrng, app.lambda(), false, "lambda for application")?;
-                self.push(")(");
-                self.rtv(txtrng, app.value(), false, "value for application")?;
+                self.push(NIX_FORCE);
+                self.push("(");
+                self.rtv(txtrng, app.lambda(), "lambda for application")?;
+                self.push("))(");
+                self.rtv(txtrng, app.value(), "value for application")?;
                 self.push(")");
-                if insert_lazy {
+                if !omit_lazy {
                     self.push(")");
                 }
             }
@@ -413,9 +443,9 @@ impl Context<'_> {
                 self.push("(()=>{");
                 self.push(NIX_BUILTINS_RT);
                 self.push(".assert(");
-                self.rtv(txtrng, art.condition(), false, "condition for assert")?;
+                self.rtv(txtrng, art.condition(), "condition for assert")?;
                 self.push("); return (");
-                self.rtv(txtrng, art.body(), false, "body for assert")?;
+                self.rtv(txtrng, art.body(), "body for assert")?;
                 self.push("); })()");
             }
 
@@ -430,21 +460,22 @@ impl Context<'_> {
 
             Pt::BinOp(bo) => {
                 if let Some(op) = bo.operator() {
+                    *self.lazyness_stack.last_mut().unwrap() = true;
+                    if !omit_lazy {
+                        self.push(&format!("new {}(()=>", NIX_LAZY));
+                    }
                     use BinOpKind as Bok;
                     match op {
                         Bok::IsSet => {
-                            self.push(&format!(
-                                "new {lazy}(()=>Object.prototype.hasOwnProperty.call(",
-                                lazy = NIX_LAZY
-                            ));
-                            self.rtv(txtrng, bo.lhs(), false, "lhs for binop ?")?;
+                            self.push("Object.prototype.hasOwnProperty.call(");
+                            self.rtv(txtrng, bo.lhs(), "lhs for binop ?")?;
                             self.push(",");
                             if let Some(x) = bo.rhs() {
                                 if let Some(y) = Ident::cast(x.clone()) {
                                     self.translate_node_ident_escape_str(&y);
                                 } else {
-                                    self.push(&format!("{force}(", force = NIX_FORCE));
-                                    self.translate_node(x, false)?;
+                                    self.push(&format!("{}(", NIX_FORCE));
+                                    self.translate_node(x)?;
                                     self.push(")");
                                 }
                             } else {
@@ -453,16 +484,18 @@ impl Context<'_> {
                                     self.txtrng_to_lineno(txtrng),
                                 ));
                             }
-                            self.push("))");
+                            self.push(")");
                         }
                         _ => {
-                            self.push(&format!("{}.{:?}", NIX_OPERATORS, op));
-                            self.push(&format!("(new {}(()=>", NIX_LAZY));
-                            self.rtv(txtrng, bo.lhs(), false, "lhs for binop")?;
-                            self.push(&format!("),new {}(()=>", NIX_LAZY));
-                            self.rtv(txtrng, bo.rhs(), false, "lhs for binop")?;
-                            self.push("))");
+                            self.push(&format!("{}.{:?}(", NIX_OPERATORS, op));
+                            self.rtv(txtrng, bo.lhs(), "lhs for binop")?;
+                            self.push(",");
+                            self.rtv(txtrng, bo.rhs(), "rhs for binop")?;
+                            self.push(")");
                         }
+                    }
+                    if !omit_lazy {
+                        self.push(")");
                     }
                 } else {
                     err!(format!(
@@ -474,9 +507,10 @@ impl Context<'_> {
 
             Pt::Dynamic(d) => {
                 // dynamic key component
+                *self.lazyness_stack.last_mut().unwrap() = true;
                 self.push(NIX_FORCE);
                 self.push("(");
-                self.rtv(txtrng, d.inner(), false, "inner for dynamic (key)")?;
+                self.rtv(txtrng, d.inner(), "inner for dynamic (key)")?;
                 self.push(")");
             }
 
@@ -488,27 +522,27 @@ impl Context<'_> {
             }
 
             Pt::IfElse(ie) => {
-                if insert_lazy {
-                    self.push(&format!("new {}(()=>(", NIX_LAZY));
+                *self.lazyness_stack.last_mut().unwrap() = true;
+                if !omit_lazy {
+                    self.push(&format!("new {}(()=>", NIX_LAZY));
                 }
+                self.push("(");
                 self.push(NIX_FORCE);
                 self.push("(");
-                self.rtv(txtrng, ie.condition(), false, "condition for if-else")?;
+                self.rtv(txtrng, ie.condition(), "condition for if-else")?;
                 self.push(")?(");
-                self.rtv(txtrng, ie.body(), false, "if-body for if-else")?;
+                self.rtv(txtrng, ie.body(), "if-body for if-else")?;
                 self.push("):(");
-                self.rtv(txtrng, ie.else_body(), false, "else-body for if-else")?;
-                self.push(")");
-                if insert_lazy {
-                    self.push("))");
+                self.rtv(txtrng, ie.else_body(), "else-body for if-else")?;
+                self.push("))");
+                if !omit_lazy {
+                    self.push(")");
                 }
             }
 
             Pt::Inherit(inh) => self.translate_node_inherit(inh, NIX_IN_SCOPE)?,
 
-            Pt::InheritFrom(inhf) => {
-                self.rtv(txtrng, inhf.inner(), insert_lazy, "inner for inherit-from")?
-            }
+            Pt::InheritFrom(inhf) => self.rtv(txtrng, inhf.inner(), "inner for inherit-from")?,
 
             Pt::Key(key) => {
                 let mut fi = true;
@@ -519,7 +553,7 @@ impl Context<'_> {
                     } else {
                         self.push(",");
                     }
-                    self.translate_node(i, false)?;
+                    self.translate_node(i)?;
                 }
                 self.push("]");
             }
@@ -536,7 +570,7 @@ impl Context<'_> {
                         self.vars.push((yas.to_string(), ScopedVar::LambdaArg));
                         self.translate_node_ident(&y);
                         self.push("=>(");
-                        self.rtv(txtrng, lam.body(), false, "body for lambda")?;
+                        self.rtv(txtrng, lam.body(), "body for lambda")?;
                         assert!(self.vars.len() >= cur_lamstk);
                         self.vars.truncate(cur_lamstk);
                         self.push(")");
@@ -567,7 +601,7 @@ impl Context<'_> {
                                     self.push(" !==undefined)?(");
                                     push_argzas(self);
                                     self.push("):(");
-                                    self.translate_node(zdfl, false)?;
+                                    self.translate_node(zdfl)?;
                                     self.push(")");
                                 } else {
                                     self.push(&format!(
@@ -585,7 +619,7 @@ impl Context<'_> {
                         // FIXME: handle missing ellipsis
 
                         self.push("return ");
-                        self.rtv(txtrng, lam.body(), false, "body for lambda")?;
+                        self.rtv(txtrng, lam.body(), "body for lambda")?;
                         assert!(self.vars.len() >= cur_lamstk);
                         self.vars.truncate(cur_lamstk);
                         self.push("}");
@@ -648,25 +682,26 @@ impl Context<'_> {
                     } else {
                         self.push(",");
                     }
-                    self.translate_node(i, insert_lazy)?;
+                    self.translate_node(i)?;
                 }
                 self.push("]");
             }
 
             Pt::OrDefault(od) => {
                 self.push(&format!("{}(new {}(()=>(", NIX_OR_DEFAULT, NIX_LAZY));
+                self.lazyness_stack.push(true);
                 self.rtv(
                     txtrng,
                     od.index().map(|i| i.node().clone()),
-                    false,
                     "or-default without indexing operation",
                 )?;
+                self.lazyness_stack.pop();
                 self.push(")),");
-                self.rtv(txtrng, od.default(), true, "or-default without default")?;
+                self.rtv(txtrng, od.default(), "or-default without default")?;
                 self.push(")");
             }
 
-            Pt::Paren(p) => self.rtv(txtrng, p.inner(), insert_lazy, "inner for paren")?,
+            Pt::Paren(p) => self.rtv(txtrng, p.inner(), "inner for paren")?,
             Pt::PathWithInterpol(p) => {
                 unreachable!("standalone path-with-interpolation not supported: {:?}", p)
             }
@@ -674,26 +709,28 @@ impl Context<'_> {
             Pt::PatBind(p) => unreachable!("standalone pattern @ bind not supported: {:?}", p),
             Pt::PatEntry(p) => unreachable!("standalone pattern entry not supported: {:?}", p),
 
-            Pt::Root(r) => self.rtv(txtrng, r.inner(), insert_lazy, "inner for root")?,
+            Pt::Root(r) => self.rtv(txtrng, r.inner(), "inner for root")?,
 
             Pt::Select(sel) => {
-                if insert_lazy {
+                *self.lazyness_stack.last_mut().unwrap() = true;
+                if !omit_lazy {
                     self.push(&format!("new {}(()=>", NIX_LAZY));
                 }
                 self.push("(");
-                self.rtv(txtrng, sel.set(), false, "set for select")?;
+                self.rtv(txtrng, sel.set(), "set for select")?;
                 self.push(")");
                 if let Some(idx) = sel.index() {
                     self.translate_node_key_element_indexing(&idx)?;
                 } else {
                     err!(format!("{:?}: {} missing", txtrng, "index for select"));
                 }
-                if insert_lazy {
+                if !omit_lazy {
                     self.push(")");
                 }
             }
 
             Pt::Str(s) => {
+                *self.lazyness_stack.last_mut().unwrap() = true;
                 use rnix::value::StrPart as Sp;
                 match s.parts()[..] {
                     [] => self.push("\"\""),
@@ -713,12 +750,7 @@ impl Context<'_> {
                                 Sp::Ast(ast) => {
                                     self.push(&format!("{}(", NIX_FORCE));
                                     let txtrng = ast.node().text_range();
-                                    self.rtv(
-                                        txtrng,
-                                        ast.inner(),
-                                        false,
-                                        "inner for str-interpolate",
-                                    )?;
+                                    self.rtv(txtrng, ast.inner(), "inner for str-interpolate")?;
                                     self.push(")");
                                 }
                             }
@@ -728,18 +760,23 @@ impl Context<'_> {
                 }
             }
 
-            Pt::StrInterpol(si) => {
-                self.rtv(txtrng, si.inner(), insert_lazy, "inner for str-interpolate")?
-            }
+            Pt::StrInterpol(si) => self.rtv(txtrng, si.inner(), "inner for str-interpolate")?,
 
             Pt::UnaryOp(uo) => {
                 use UnaryOpKind as Uok;
                 match uo.operator() {
                     Uok::Invert | Uok::Negate => {}
                 }
+                *self.lazyness_stack.last_mut().unwrap() = true;
+                if !omit_lazy {
+                    self.push(&format!("new {}(()=>", NIX_LAZY));
+                }
                 self.push(&format!("{}.u_{:?}(", NIX_OPERATORS, uo.operator()));
-                self.rtv(txtrng, uo.value(), false, "value for unary-op")?;
+                self.rtv(txtrng, uo.value(), "value for unary-op")?;
                 self.push(")");
+                if !omit_lazy {
+                    self.push(")");
+                }
             }
 
             Pt::Value(v) => match v.to_value() {
@@ -773,17 +810,14 @@ impl Context<'_> {
 
             Pt::With(with) => {
                 self.push(&format!("({}=>(", NIX_IN_SCOPE));
-                self.rtv(txtrng, with.body(), insert_lazy, "body for 'with' scope")?;
+                self.rtv(txtrng, with.body(), "body for 'with' scope")?;
                 self.push(&format!("))(nixBlti.mkScopeWith({},", NIX_IN_SCOPE));
-                self.rtv(
-                    txtrng,
-                    with.namespace(),
-                    false,
-                    "namespace for 'with' scope",
-                )?;
+                self.rtv(txtrng, with.namespace(), "namespace for 'with' scope")?;
                 self.push("))");
             }
         }
+
+        self.lazyness_stack.pop();
 
         Ok(())
     }
@@ -816,12 +850,13 @@ pub fn translate(s: &str, inp_name: &str) -> Result<(String, String), Vec<String
         inp: s,
         acc: &mut ret,
         vars: Default::default(),
+        lazyness_stack: Vec::new(),
         names: &mut names,
         mappings: &mut mappings,
         lp_src: Default::default(),
         lp_dst: Default::default(),
     }
-    .translate_node(parsed.node(), false)?;
+    .translate_node(parsed.node())?;
     ret += ";})";
     let mappings = String::from_utf8(mappings).unwrap();
     Ok((
