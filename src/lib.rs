@@ -805,11 +805,11 @@ pub fn translate(s: &str, inp_name: &str) -> Result<(String, String), Vec<String
         Vec::new(),
         Vec::with_capacity((3 * s.len()) / 5),
     );
-    ret += "(function(nixRt,nixBlti){let[";
-    ret += NIX_BUILTINS_RT;
-    ret.push(',');
+    ret += "(function(nixRt,nixBlti){let ";
     ret += NIX_OPERATORS;
-    ret += "]=nixBlti.initRtDep(nixRt);let ";
+    ret += "=nixBlti.nixOp;let ";
+    ret += NIX_BUILTINS_RT;
+    ret += "=nixBlti.initRtDep(nixRt);let ";
     ret += NIX_IN_SCOPE;
     ret += "=nixBlti.mkScopeWith();return ";
     Context {

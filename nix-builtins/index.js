@@ -290,8 +290,104 @@ const nixTypeOf = {
     'object': 'set'
 };
 
+// operators
+export const nixOp = {
+    u_Invert: a => !force(a),
+    u_Negate: a => -force(a),
+    _deepMerge: function(attrs_, value, ...path) {
+        let attrs = attrs_;
+        while(1) {
+            let pfi = path.shift();
+            if (pfi === undefined) {
+                throw new NixEvalError("deepMerge: encountered empty path");
+            }
+            if (typeof attrs !== 'object') {
+                throw new NixEvalError("deepMerge: tried to merge attrset into non-object (", attrs, ")");
+            }
+            if (path.length) {
+                if (!attrs.hasOwnProperty(pfi)) {
+                    // this should prevent prototype pollution
+                    attrs[pfi] = Object.create(null);
+                }
+                attrs = attrs[pfi];
+            } else {
+                attrs[pfi] = value;
+                break;
+            }
+        }
+    },
+    _lambdaA2chk: function(attrs, key) {
+        if (attrs[key] === undefined) {
+            // TODO: adjust error message to what Nix currently issues.
+            throw new NixEvalError("Attrset element " + key + "missing at lambda call");
+        }
+        return attrs[key];
+    },
+    Concat: binop_helper("operator ++", function(a, b) {
+        if (typeof a !== 'object') {
+            throw TypeError("operator ++: invalid input type (" + typeof a + ")");
+        }
+        return a.concat(b);
+    }),
+    // IsSet is implemented via .hasOwnProperty
+    Update: binop_helper("operator //", function(a, b) {
+        if (typeof a !== 'object') {
+            throw TypeError("operator //: invalid input type (" + typeof a + ")");
+        }
+        return fixObjectProto({}, a, b);
+    }),
+    Add: binop_helper("+", function(a, b) {
+        return a + b;
+    }),
+    Sub: binop_helper("-", function(a, b) {
+        req_type("-", a, "number");
+        return a - b;
+    }),
+    Mul: binop_helper("*", function(a, b) {
+        req_type("*", a, "number");
+        return a * b;
+    }),
+    Div: binop_helper("/", function(a, b) {
+        req_type("/", a, "number");
+        if (!b) {
+            throw RangeError('Division by zero');
+        }
+        return a / b;
+    }),
+    And: binop_helper("&&", function(a, b) {
+        req_type("&&", a, "boolean");
+        return a && b;
+    }),
+    Implication: binop_helper("->", function(a, b) {
+        req_type("->", a, "boolean");
+        return (!a) || b;
+    }),
+    Or: binop_helper("||", function(a, b) {
+        req_type("||", a, "boolean");
+        return a || b;
+    }),
+    Equal: (a, b) => _.isEqual(force(a), force(b)),
+    NotEqual: (a, b) => !_.isEqual(force(a), force(b)),
+    Less: binop_helper("<", function(a, b) {
+        req_type("<", a, "number");
+        return a < b;
+    }),
+    LessOrEq: binop_helper("<=", function(a, b) {
+        req_type("<=", a, "number");
+        return a <= b;
+    }),
+    More: binop_helper(">", function(a, b) {
+        req_type(">", a, "number");
+        return a > b;
+    }),
+    MoreOrEq: binop_helper(">=", function(a, b) {
+        req_type(">=", a, "number");
+        return a >= b;
+    })
+};
+
 export function initRtDep(nixRt) {
-    return [{
+    return {
         abort: s => {throw new NixAbortError(tyforce_string(s));},
         add: a => function(c) {
             let b = force(a);
@@ -543,99 +639,5 @@ export function initRtDep(nixRt) {
                 return "list";
             return nixTypeOf.hasOwnProperty(ety) ? nixTypeOf[ety] : ety;
         }
-    },
-    {
-        u_Invert: a => !force(a),
-        u_Negate: a => -force(a),
-        _deepMerge: function(attrs_, value, ...path) {
-            let attrs = attrs_;
-            while(1) {
-                let pfi = path.shift();
-                if (pfi === undefined) {
-                    throw new NixEvalError("deepMerge: encountered empty path");
-                }
-                if (typeof attrs !== 'object') {
-                    throw new NixEvalError("deepMerge: tried to merge attrset into non-object (", attrs, ")");
-                }
-                if (path.length) {
-                    if (!attrs.hasOwnProperty(pfi)) {
-                        // this should prevent prototype pollution
-                        attrs[pfi] = Object.create(null);
-                    }
-                    attrs = attrs[pfi];
-                } else {
-                    attrs[pfi] = value;
-                    break;
-                }
-            }
-        },
-        _lambdaA2chk: function(attrs, key) {
-            if (attrs[key] === undefined) {
-                // TODO: adjust error message to what Nix currently issues.
-                throw new NixEvalError("Attrset element " + key + "missing at lambda call");
-            }
-            return attrs[key];
-        },
-        Concat: binop_helper("operator ++", function(a, b) {
-            if (typeof a !== 'object') {
-                throw TypeError("operator ++: invalid input type (" + typeof a + ")");
-            }
-            return a.concat(b);
-        }),
-        // IsSet is implemented via .hasOwnProperty
-        Update: binop_helper("operator //", function(a, b) {
-            if (typeof a !== 'object') {
-                throw TypeError("operator //: invalid input type (" + typeof a + ")");
-            }
-            return fixObjectProto({}, a, b);
-        }),
-        Add: binop_helper("+", function(a, b) {
-            return a + b;
-        }),
-        Sub: binop_helper("-", function(a, b) {
-            req_type("-", a, "number");
-            return a - b;
-        }),
-        Mul: binop_helper("*", function(a, b) {
-            req_type("*", a, "number");
-            return a * b;
-        }),
-        Div: binop_helper("/", function(a, b) {
-            req_type("/", a, "number");
-            if (!b) {
-                throw RangeError('Division by zero');
-            }
-            return a / b;
-        }),
-        And: binop_helper("&&", function(a, b) {
-            req_type("&&", a, "boolean");
-            return a && b;
-        }),
-        Implication: binop_helper("->", function(a, b) {
-            req_type("->", a, "boolean");
-            return (!a) || b;
-        }),
-        Or: binop_helper("||", function(a, b) {
-            req_type("||", a, "boolean");
-            return a || b;
-        }),
-        Equal: (a, b) => _.isEqual(force(a), force(b)),
-        NotEqual: (a, b) => !_.isEqual(force(a), force(b)),
-        Less: binop_helper("<", function(a, b) {
-            req_type("<", a, "number");
-            return a < b;
-        }),
-        LessOrEq: binop_helper("<=", function(a, b) {
-            req_type("<=", a, "number");
-            return a <= b;
-        }),
-        More: binop_helper(">", function(a, b) {
-            req_type(">", a, "number");
-            return a > b;
-        }),
-        MoreOrEq: binop_helper(">=", function(a, b) {
-            req_type(">=", a, "number");
-            return a >= b;
-        })
-    }];
+    };
 }

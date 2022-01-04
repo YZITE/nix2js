@@ -1,4 +1,4 @@
-import { Lazy, force, initRtDep, allKeys, extractScope, mkScope, mkScopeWith, ScopeError } from "./index.js";
+import { Lazy, force, initRtDep, allKeys, extractScope, mkScope, mkScopeWith, ScopeError, nixOp } from "./index.js";
 import { isEqual } from 'lodash-es';
 import assert from 'webassert';
 
@@ -10,7 +10,7 @@ function assert_eq(a, b, msg) {
     }
 }
 
-let instrum_blti = initRtDep({});
+let xblti = initRtDep({});
 
 describe('Lazy', function() {
     it('should be lazy', function() {
@@ -158,16 +158,14 @@ describe('mkScopeWith', function() {
 
 describe('add', function() {
     it('should work if arguments are correct', function() {
-        let blti = instrum_blti[0];
-        assert_eq(blti.add(1200)(567), 1767, "integer");
-        assert_eq(blti.add(-100)(567), 467, "integer (2)");
-        assert_eq(blti.add(203)(-500), -297, "integer (3)");
+        assert_eq(xblti.add(1200)(567), 1767, "integer");
+        assert_eq(xblti.add(-100)(567), 467, "integer (2)");
+        assert_eq(xblti.add(203)(-500), -297, "integer (3)");
     });
     describe('should report errors correctly', function() {
         it("string/string", function() {
-            let blti = instrum_blti[0];
             try {
-                console.log(blti.add("ab")("cde"));
+                console.log(xblti.add("ab")("cde"));
                 assert(false, "unreachable");
             } catch(e) {
                 assert(e instanceof TypeError, "error kind");
@@ -175,9 +173,8 @@ describe('add', function() {
             }
         });
         it("int/string", function() {
-            let blti = instrum_blti[0];
             try {
-                console.log(blti.add(0)("oops"));
+                console.log(xblti.add(0)("oops"));
                 assert(false, "unreachable");
             } catch(e) {
                 assert(e instanceof TypeError, "error kind");
@@ -185,9 +182,8 @@ describe('add', function() {
             }
         });
         it("string/int", function() {
-            let blti = instrum_blti[0];
             try {
-                console.log(blti.add("oops")(0));
+                console.log(xblti.add("oops")(0));
                 assert(false, "unreachable");
             } catch(e) {
                 assert(e instanceof TypeError, "error kind");
@@ -199,43 +195,39 @@ describe('add', function() {
 
 describe('compareVersions', function() {
     it('should work for simple cases', function() {
-        let blti = instrum_blti[0];
-        assert_eq(blti.compareVersions("1.0")("2.3"), -1, "(1)");
-        assert_eq(blti.compareVersions("2.3")("1.0"), 1, "(2)");
-        assert_eq(blti.compareVersions("2.1")("2.3"), -1, "(3)");
-        assert_eq(blti.compareVersions("2.3")("2.3"), 0, "(4)");
-        assert_eq(blti.compareVersions("2.5")("2.3"), 1, "(5)");
-        assert_eq(blti.compareVersions("3.1")("2.3"), 1, "(6)");
+        assert_eq(xblti.compareVersions("1.0")("2.3"), -1, "(1)");
+        assert_eq(xblti.compareVersions("2.3")("1.0"), 1, "(2)");
+        assert_eq(xblti.compareVersions("2.1")("2.3"), -1, "(3)");
+        assert_eq(xblti.compareVersions("2.3")("2.3"), 0, "(4)");
+        assert_eq(xblti.compareVersions("2.5")("2.3"), 1, "(5)");
+        assert_eq(xblti.compareVersions("3.1")("2.3"), 1, "(6)");
     });
     it('should work for complex cases', function() {
-        let blti = instrum_blti[0];
-        assert_eq(blti.compareVersions("2.3.1")("2.3"), 1, "(7)");
-        assert_eq(blti.compareVersions("2.3.1")("2.3a"), 1, "(8)");
-        assert_eq(blti.compareVersions("2.3pre1")("2.3"), -1, "(9)");
-        assert_eq(blti.compareVersions("2.3")("2.3pre1"), 1, "(10)");
-        assert_eq(blti.compareVersions("2.3pre3")("2.3pre12"), -1, "(11)");
-        assert_eq(blti.compareVersions("2.3pre12")("2.3pre3"), 1, "(12)");
-        assert_eq(blti.compareVersions("2.3a")("2.3c"), -1, "(13)");
-        assert_eq(blti.compareVersions("2.3c")("2.3a"), 1, "(14)");
-        assert_eq(blti.compareVersions("2.3pre1")("2.3c"), -1, "(15)");
-        assert_eq(blti.compareVersions("2.3pre1")("2.3q"), -1, "(16)");
-        assert_eq(blti.compareVersions("2.3q")("2.3pre1"), 1, "(17)");
+        assert_eq(xblti.compareVersions("2.3.1")("2.3"), 1, "(7)");
+        assert_eq(xblti.compareVersions("2.3.1")("2.3a"), 1, "(8)");
+        assert_eq(xblti.compareVersions("2.3pre1")("2.3"), -1, "(9)");
+        assert_eq(xblti.compareVersions("2.3")("2.3pre1"), 1, "(10)");
+        assert_eq(xblti.compareVersions("2.3pre3")("2.3pre12"), -1, "(11)");
+        assert_eq(xblti.compareVersions("2.3pre12")("2.3pre3"), 1, "(12)");
+        assert_eq(xblti.compareVersions("2.3a")("2.3c"), -1, "(13)");
+        assert_eq(xblti.compareVersions("2.3c")("2.3a"), 1, "(14)");
+        assert_eq(xblti.compareVersions("2.3pre1")("2.3c"), -1, "(15)");
+        assert_eq(xblti.compareVersions("2.3pre1")("2.3q"), -1, "(16)");
+        assert_eq(xblti.compareVersions("2.3q")("2.3pre1"), 1, "(17)");
     });
 })
 
 describe('+', function() {
     it('should work if arguments are correct', function() {
-        let blti = instrum_blti[1];
-        assert_eq(blti.Add(1200, 567), 1767, "integer");
-        assert_eq(blti.Add(-100, 567), 467, "integer (2)");
-        assert_eq(blti.Add(203, -500), -297, "integer (3)");
-        assert_eq(blti.Add("ab", "cde"), "abcde", "string");
+        assert_eq(nixOp.Add(1200, 567), 1767, "integer");
+        assert_eq(nixOp.Add(-100, 567), 467, "integer (2)");
+        assert_eq(nixOp.Add(203, -500), -297, "integer (3)");
+        assert_eq(nixOp.Add("ab", "cde"), "abcde", "string");
     });
     describe('should report errors correctly', function() {
         it("int/string", function() {
-            let blti = instrum_blti[1];
             try {
-                console.log(blti.Add(0, "oops"));
+                console.log(nixOp.Add(0, "oops"));
                 assert(false, "unreachable");
             } catch(e) {
                 assert(e instanceof TypeError, "error kind");
@@ -243,9 +235,8 @@ describe('+', function() {
             }
         });
         it("string/int", function() {
-            let blti = instrum_blti[1];
             try {
-                console.log(blti.Add("oops", 0));
+                console.log(nixOp.Add("oops", 0));
                 assert(false, "unreachable");
             } catch(e) {
                 assert(e instanceof TypeError, "error kind");
@@ -256,32 +247,28 @@ describe('+', function() {
 });
 
 it('-', function() {
-    let blti = instrum_blti[1];
-    assert_eq(blti.Sub(1200, 567), 633, "integer");
-    assert_eq(blti.Sub(-100, 567), -667, "integer (2)");
-    assert_eq(blti.Sub(203, -500), 703, "integer (3)");
+    assert_eq(nixOp.Sub(1200, 567), 633, "integer");
+    assert_eq(nixOp.Sub(-100, 567), -667, "integer (2)");
+    assert_eq(nixOp.Sub(203, -500), 703, "integer (3)");
 });
 
 it('*', function() {
-    let blti = instrum_blti[1];
-    assert_eq(blti.Mul(50, 46), 2300, "integer");
-    assert_eq(blti.Mul(50004, 1023), 51154092, "integer (2)");
-    assert_eq(blti.Mul(203, -500), -101500, "integer (3)");
-    assert_eq(blti.Mul(-203, 500), -101500, "integer (4)");
-    assert_eq(blti.Mul(-203, -500), 101500, "integer (5)");
+    assert_eq(nixOp.Mul(50, 46), 2300, "integer");
+    assert_eq(nixOp.Mul(50004, 1023), 51154092, "integer (2)");
+    assert_eq(nixOp.Mul(203, -500), -101500, "integer (3)");
+    assert_eq(nixOp.Mul(-203, 500), -101500, "integer (4)");
+    assert_eq(nixOp.Mul(-203, -500), 101500, "integer (5)");
 });
 
 describe('/', function() {
     it('should work if arguments are correct', function() {
-        let blti = instrum_blti[1];
-        assert_eq(blti.Div(1, 1), 1, "integer");
-        assert_eq(blti.Div(8, 4), 2, "integer (2)");
-        assert_eq(blti.Div(754677, 1331), 567, "integer (3)");
+        assert_eq(nixOp.Div(1, 1), 1, "integer");
+        assert_eq(nixOp.Div(8, 4), 2, "integer (2)");
+        assert_eq(nixOp.Div(754677, 1331), 567, "integer (3)");
     });
     it('should catch division-by-zero', function() {
-        let blti = instrum_blti[1];
         try {
-            console.log(blti.Div(1, 0));
+            console.log(nixOp.Div(1, 0));
             assert(false, "unreachable");
         } catch(e) {
             assert(e instanceof RangeError, "error kind");
@@ -292,22 +279,20 @@ describe('/', function() {
 
 describe('//', function() {
     it('should merge distinct attrsets correctly', function() {
-        let blti = instrum_blti[1];
-        assert_eq(blti.Update({a: 1}, {b:2}), {a:1, b:2});
+        assert_eq(nixOp.Update({a: 1}, {b:2}), {a:1, b:2});
     });
     it('should merge overlapping attrsets correctly', function() {
-        let blti = instrum_blti[1];
         let a = {a: {i: 0}};
         let b = {a: {i: 2}};
-        assert_eq(blti.Update(a, b), {a: {i: 2}}, "//");
+        assert_eq(nixOp.Update(a, b), {a: {i: 2}}, "//");
         assert_eq(a, {a: {i: 0}}, "original objects shouldn't be modified");
     });
 });
 
 it('==', function() {
-    assert_eq(instrum_blti[1].Equal(1, 1), true);
+    assert_eq(nixOp.Equal(1, 1), true);
 });
 
 it('!=', function() {
-    assert_eq(instrum_blti[1].NotEqual(1, 1), false);
+    assert_eq(nixOp.NotEqual(1, 1), false);
 });
