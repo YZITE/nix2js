@@ -107,6 +107,10 @@ export const allKeys = Symbol('__all__');
 export const extractScope = Symbol('__dict__');
 
 export function mkScope(orig) {
+    if (orig === undefined) {
+        // "Object prototype may only be an Object or null"
+        orig = null;
+    }
     // we need to handle mkScope()
     let orig_keys = orig ? (() => Object.keys(orig)) : (() => []);
     // Object.create prevents prototype pollution
@@ -234,32 +238,33 @@ const isAttrs = e => typeof e === 'object' && !(
 const deepSeq_helper = e => {
     e = force(e);
     if (isAttrs(e)) {
-        for (i of e) deepSeq_helper(i);
+        for (let i of e) deepSeq_helper(i);
     }
 };
 
-// anti-prototype pollution filter taken from npm package 'no-pollution'
-// source: https://github.com/DaniAkash/no-pollution/blob/3bfe3f419d49acd1ab157c7b9655161c4942fedd/index.js
-// Copyright (c) 2019-present DaniAkash
-// SPDX-License-Identifier: MIT
-/*
-    Permission is hereby granted, free of charge, to any person obtaining a copy
-    of this software and associated documentation files (the "Software"), to deal
-    in the Software without restriction, including without limitation the rights
-    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-    copies of the Software, and to permit persons to whom the Software is
-    furnished to do so, subject to the following conditions:
+/* @preserve
+anti-prototype pollution filter taken from npm package 'no-pollution'
+source: https://github.com/DaniAkash/no-pollution/blob/3bfe3f419d49acd1ab157c7b9655161c4942fedd/index.js
+Copyright (c) 2019-present DaniAkash
+SPDX-License-Identifier: MIT
 
-    The above copyright notice and this permission notice shall be included in all
-    copies or substantial portions of the Software.
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
 
-    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-    SOFTWARE.
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 */
 const anti_pollution = e => fixObjectProto(JSON.parse(e.replace(new RegExp("(_|\\\\_|[\\\\u05fFx]+){2}proto(_|\\\\_|[\\\\u05fFx]+){2}(?=[\"']+[\\s:]+[{\"'])", 'g'), '__pollutants__')));
 
@@ -554,7 +559,7 @@ export function initRtDep(nixRt) {
         removeAttrs: aset => list => {
             // make sure that we don't override the original object
             let aset2 = fixObjectProto(force(aset));
-            for (key of tyforce_list(list)) {
+            for (const key of tyforce_list(list)) {
                 delete aset2[key];
             }
             return aset2;

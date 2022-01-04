@@ -18,6 +18,7 @@
   },
   "homepage": "https://github.com/YZITE/nix2js#readme",
   "dependencies": {
-    "nix-builtins": "file:nix-builtins"
+    "nix-builtins": "file:nix-builtins",
+    "nix2js-wasm": "file:wasm/pkg"
   }
 }

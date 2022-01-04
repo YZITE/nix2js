@@ -839,7 +839,7 @@ pub fn translate(s: &str, inp_name: &str) -> Result<(String, String), Vec<String
         Vec::new(),
         Vec::with_capacity((3 * s.len()) / 5),
     );
-    ret += "(function(nixRt,nixBlti){let ";
+    ret += "let ";
     ret += NIX_OPERATORS;
     ret += "=nixBlti.nixOp;let ";
     ret += NIX_BUILTINS_RT;
@@ -857,7 +857,7 @@ pub fn translate(s: &str, inp_name: &str) -> Result<(String, String), Vec<String
         lp_dst: Default::default(),
     }
     .translate_node(parsed.node())?;
-    ret += ";})";
+    ret += ";";
     let mappings = String::from_utf8(mappings).unwrap();
     Ok((
         ret,
