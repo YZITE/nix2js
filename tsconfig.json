@@ -1,0 +1,11 @@
+{
+  "files": ["nix-builtins/index.ts"],
+  "compilerOptions": {
+    "declaration": true,
+    "declarationMap": true,
+    "esModuleInterop": true,
+    "moduleResolution": "node",
+    "sourceMap": false,
+    "target": "es2020"
+  }
+}

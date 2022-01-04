@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 
 import * as _ from 'lodash-es';
+import assert from 'webassert';
 
 export const API_VERSION = 0;
 
-export class NixAbortError extends Error { constructor(message, options) { super(message, options); } }
-export class NixEvalError extends Error { constructor(message, options) { super(message, options); } }
+export class NixAbortError extends Error { }
+export class NixEvalError extends Error { }
 
 const LazyHandler = {
     get: (target, key) => (key in target) ? target[key] : target.evaluate()[key],
@@ -13,6 +14,8 @@ const LazyHandler = {
 };
 
 export class Lazy {
+    private i: any;
+    private iL: boolean;
     constructor(inner) {
         // TODO: maybe integrate Promise objects
         this.i = inner;
@@ -31,7 +34,7 @@ export class Lazy {
             this.iL = false;
             let buf = this.i;
             // poison inner Apply.
-            this.i = ()=>{throw NixEvalError('self-referential lazy evaluation is forbidden')};
+            this.i = ()=>{throw new NixEvalError('self-referential lazy evaluation is forbidden')};
             this.i._poison = true;
             try {
                 let res = buf.apply(buf, arguments);
@@ -97,7 +100,7 @@ const isString = isnaty(String, 'string');
 // the assignment ensures that future assignments won't currupt the prototype
 export const fixObjectProto = (...objs) => Object.assign(Object.create(null), ...objs);
 
-export class ScopeError extends Error { constructor(message, options) { super(message, options); } }
+export class ScopeError extends Error { }
 
 // used to get all keys present in a scope, including inherited ones
 export const allKeys = Symbol('__all__');
@@ -106,7 +109,7 @@ export const allKeys = Symbol('__all__');
 // without the proxy wrapper.
 export const extractScope = Symbol('__dict__');
 
-export function mkScope(orig) {
+export function mkScope(orig: undefined | null | object): object {
     if (orig === undefined) {
         // "Object prototype may only be an Object or null"
         orig = null;
@@ -164,7 +167,7 @@ const readOnlyHandler = {
     }
 };
 
-export function mkScopeWith(...objs) {
+export function mkScopeWith(...objs: object[]): object {
     let handler = Object.create(readOnlyHandler);
     handler.get = (target, key) => {
         if (key in target) {
@@ -197,7 +200,7 @@ export function orDefault(lazy_selop, lazy_dfl) {
         ret = lazy_selop.evaluate();
     } catch (e) {
         // this is flaky...
-        if (e instanceof TypeError && e.message.starts_with('Cannot read properties of undefined ')) {
+        if (e instanceof TypeError && e.message.startsWith('Cannot read properties of undefined ')) {
             console.debug("nix-blti.orDefault: encountered+catched TypeError:", e);
             return lazy_dfl.evaluate();
         } else {
@@ -284,7 +287,7 @@ const nixToStringHandler = {
     'boolean': x => x ? "1" : "",
 };
 
-function nixToString(x) {
+function nixToString(x): string {
     x = force(x);
     if (x === null || x === undefined) return "";
     if (typeof x === 'object' && 'valueOf' in x)
@@ -307,7 +310,7 @@ const nixTypeOf = {
 export const nixOp = {
     u_Invert: a => !force(a),
     u_Negate: a => -force(a),
-    _deepMerge: function(attrs_, value, ...path) {
+    _deepMerge: function(attrs_: object, value: any, ...path: string[]): void {
         let attrs = attrs_;
         while(1) {
             let pfi = path.shift();
@@ -315,7 +318,7 @@ export const nixOp = {
                 throw new NixEvalError("deepMerge: encountered empty path");
             }
             if (typeof attrs !== 'object') {
-                throw new NixEvalError("deepMerge: tried to merge attrset into non-object (", attrs, ")");
+                throw new NixEvalError("deepMerge: tried to merge attrset into non-object (" + typeof attrs + ")");
             }
             if (path.length) {
                 if (!attrs.hasOwnProperty(pfi)) {
@@ -329,7 +332,7 @@ export const nixOp = {
             }
         }
     },
-    _lambdaA2chk: function(attrs, key) {
+    _lambdaA2chk: function(attrs: object, key: string): any {
         if (attrs[key] === undefined) {
             // TODO: adjust error message to what Nix currently issues.
             throw new NixEvalError("Attrset element " + key + "missing at lambda call");
@@ -566,17 +569,19 @@ export function initRtDep(nixRt) {
         },
 
         // ref: https://stackoverflow.com/a/67337940
-        replaceStrings: from => to => s => Object.entries(_.zip(from, to))
-            .reduce(
-                // Replace all the occurrences of the keys in the text into an index placholder using split-join
-                (_str, [key], i) => _str.split(key).join(`{${i}}`),
-                // Manipulate all exisitng index placeholder -like formats, in order to prevent confusion
-                str.replace(/\{(?=\d+\})/g, '{-')
-            )
-            // Replace all index placeholders to the desired replacement values
-            .replace(/\{(\d+)\}/g, (_,i) => entries[i][1])
-            // Undo the manipulation of index placeholder -like formats
-            .replace(/\{-(?=\d+\})/g, '{'),
+        replaceStrings: from => to => s => {
+            let entries = Object.entries(_.zip(from, to));
+            return entries.reduce(
+                    // Replace all the occurrences of the keys in the text into an index placholder using split-join
+                    (_str, [key], i) => _str.split(key).join(`{${i}}`),
+                    // Manipulate all exisitng index placeholder -like formats, in order to prevent confusion
+                    s.replace(/\{(?=\d+\})/g, '{-')
+                )
+                // Replace all index placeholders to the desired replacement values
+                .replace(/\{(\d+)\}/g, (_,i) => entries[i][1])
+                // Undo the manipulation of index placeholder -like formats
+                .replace(/\{-(?=\d+\})/g, '{');
+        },
 
         seq: e1 => {
             if (e1 instanceof Lazy) {

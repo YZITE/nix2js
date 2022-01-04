@@ -1,10 +1,12 @@
-flamegraph.svg
+*.d.ts
 *.js.map
 *.min.js
+*.tgz
+flamegraph.svg
+nix-builtins/index.js
 node_modules
 perf.data
 pkg
 result
 result-*
 target
-*.tgz

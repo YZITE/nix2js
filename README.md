@@ -20,7 +20,8 @@ The resulting code is then (if successful) present in `wasm/pkg`.
 
 ```sh
 npm i
-npm -w nix-builtins run prepare
+# this calls tsc and wasm-pack
+npx gulp compile
 node
 ```
 inside of the node REPL, type the following to setup some baseline env:
