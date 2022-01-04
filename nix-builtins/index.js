@@ -32,14 +32,22 @@ export class Lazy {
             let buf = this.i;
             // poison inner Apply.
             this.i = ()=>{throw NixEvalError('self-referential lazy evaluation is forbidden')};
-            let res = buf.apply(buf, arguments);
-            // automatic unfolding
-            if (res instanceof Lazy) {
-                this.iL = res.iL;
-                this.i = res.i;
-            } else {
-                this.i = res;
-                break;
+            this.i._poison = true;
+            try {
+                let res = buf.apply(buf, arguments);
+                // automatic unfolding
+                if (res instanceof Lazy) {
+                    this.iL = res.iL;
+                    this.i = res.i;
+                } else {
+                    this.i = res;
+                    break;
+                }
+            } finally {
+                if (this.i instanceof Function && this.i._poison === true) {
+                    // restore the function in case of failure
+                    this.i = buf;
+                }
             }
         }
         return this.i;
