@@ -19,6 +19,8 @@ let compile_rust = (cb) => {
         if (code !== 0) {
             console.error('wasm-pack failed! $?=' + code.toString());
             cb(new Error('wasm-pack failed'));
+        } else {
+            cb();
         }
     });
 };
