@@ -563,7 +563,7 @@ impl Context<'_> {
                 if let Some(x) = lam.arg() {
                     // FIXME: use guard to truncate vars
                     let cur_lamstk = self.vars.len();
-                    self.push("(");
+                    self.push("(async ");
                     if let Some(y) = Ident::cast(x.clone()) {
                         let yas = y.as_str();
                         self.vars.push((yas.to_string(), ScopedVar::LambdaArg));
@@ -583,6 +583,10 @@ impl Context<'_> {
                             NIX_LAMBDA_BOUND.to_string()
                         };
                         self.push("=>{");
+                        self.push(&argname);
+                        self.push("=await ");
+                        self.push(&argname);
+                        self.push(";");
                         for i in y.entries() {
                             if let Some(z) = i.name() {
                                 self.push("let ");
