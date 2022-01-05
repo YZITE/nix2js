@@ -30,7 +30,7 @@ let nixRtFe = await import('./mock-runtime.mjs');
 // we can import parts of nixpkgs,
 // going directly to `impure.nix` avoids confrontation with missing nix-version stuff
 let a = nixRtFe.loadInitial('/path/to/nixpkgs/pkgs/top-level/impure.nix');
-let b = a({localSystem:'x86_64-linux'}).evaluate();
+let b = await a({localSystem:{system:'x86_64-linux'}});
 ```
 
 ## TODO
