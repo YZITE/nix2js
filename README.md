@@ -3,6 +3,10 @@
 This is an experiment to try to transpile nix expressions to JavaScript and
 execute them via NodeJS.
 
+This currently evaluates everything strictly,
+but encapsulates it using promises, which gives a kind of non-strict eval
+with regards to assertions and other exceptions.
+
 The (`target/release`)`nix2js` executable can be built using:
 ```sh
 cargo build --release
@@ -35,7 +39,6 @@ let b = await a({localSystem:{system:'x86_64-linux'}});
 
 ## TODO
 
-- improve and verify the laziness properties of this
 - nested attrset keys and non-recursive attrsets are implemented suboptimally
 - implement missing nix builtins (esp. those marked with `TODO:`)
   - `derivation` should create an object with a `realise` method
