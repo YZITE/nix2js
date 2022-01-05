@@ -1,4 +1,4 @@
-import fs from 'node:fs';
+import fs from 'node:fs/promises';
 import path from 'node:path';
 import { translate } from 'nix2js-wasm';
 import * as nixBlti from 'nix-builtins';
@@ -23,7 +23,7 @@ function buildRT(opath) {
     const dirnam = path.dirname(opath);
     return {
         export: expf,
-        import: (xpath) => {
+        import: async (xpath) => {
             console.log(opath + ': called RT.import with path=' + xpath);
             let real_path = null;
             if (xpath.startsWith(REL_PFX)) {
@@ -37,12 +37,12 @@ function buildRT(opath) {
             const tstart = process.hrtime();
             let fdat = null;
             try {
-                fdat = fs.readFileSync(real_path, 'utf8');
+                fdat = await fs.readFile(real_path, 'utf8');
             } catch(e) {
                 if (e.message.includes('illegal operation on a directory')) {
                     real_path = path.resolve(real_path, 'default.nix');
                     console.log('   -> retry with: ' + real_path);
-                    fdat = fs.readFileSync(real_path, 'utf8');
+                    fdat = await fs.readFile(real_path, 'utf8');
                 } else {
                     throw e;
                 }
