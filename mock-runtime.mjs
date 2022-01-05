@@ -42,9 +42,11 @@ async function importTail(real_path) {
         stru = (new Function('nixRt', 'nixBlti', trld))(buildRT(real_path), nixBlti);
     } catch (e) {
         console.log(real_path, e);
+        import_cache[real_path] = Promise.reject(e);
         throw e;
     }
     console.log('  ' + fmtTdif(process.hrtime(tstart)) + '\tevaluated');
+    import_cache[real_path] = stru;
     return stru;
 }
 
