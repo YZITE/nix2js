@@ -26,6 +26,10 @@ const NIX_IN_SCOPE: &str = "nixInScope";
 const NIX_LAMBDA_ARG_PFX: &str = "nix__";
 const NIX_LAMBDA_BOUND: &str = "nixBound";
 
+const NIX_LAZY_START: &str = "(async ()=>(await ";
+const NIX_LAZY_HALFEND: &str = ")()";
+const NIX_LAZY_END: &str = "))()";
+
 enum ScopedVar {
     LambdaArg,
 }
@@ -201,7 +205,7 @@ impl Context<'_> {
                 None => {
                     let insert_async = !*self.lazyness_stack.last().unwrap_or(&false);
                     if insert_async {
-                        self.push("(async ()=>await ");
+                        self.push(NIX_LAZY_START);
                     }
                     let startpos = self.acc.len();
                     self.push(NIX_IN_SCOPE);
@@ -211,7 +215,7 @@ impl Context<'_> {
                         format!("[{}]", escape_str(vn))
                     });
                     if insert_async {
-                        self.push(")");
+                        self.push(NIX_LAZY_END);
                     }
                     ret = Some(self.acc[startpos..].to_string());
                 }
@@ -308,7 +312,12 @@ impl Context<'_> {
         Ok(())
     }
 
-    fn translate_node_inherit(&mut self, inh: Inherit, scope: &str) -> TranslateResult {
+    fn translate_node_inherit(
+        &mut self,
+        inh: Inherit,
+        scope: &str,
+        use_inhtmp: Option<String>,
+    ) -> TranslateResult {
         // inherit may be used in self-referential attrsets,
         // and omitting lazy there would be a bad idea.
         self.lazyness_stack.push(true);
@@ -318,7 +327,8 @@ impl Context<'_> {
                 let id = idents.remove(0);
                 self.push(scope);
                 self.translate_node_ident_indexing(&id);
-                self.push("=async ()=>(await ");
+                self.push("=");
+                self.push(NIX_LAZY_START);
                 self.rtv(
                     inhf.node().text_range(),
                     inhf.inner(),
@@ -326,9 +336,16 @@ impl Context<'_> {
                 )?;
                 self.push(")");
                 self.translate_node_ident_indexing(&id);
+                self.push(NIX_LAZY_HALFEND);
                 self.push(";");
             } else {
-                self.push("(async ()=>{let nixInhR=");
+                if let Some(x) = &use_inhtmp {
+                    self.push("const ");
+                    self.push(x);
+                } else {
+                    self.push("await (async ()=>{const nixInhR");
+                }
+                self.push("=");
                 self.rtv(
                     inhf.node().text_range(),
                     inhf.inner(),
@@ -338,11 +355,20 @@ impl Context<'_> {
                 for id in idents {
                     self.push(scope);
                     self.translate_node_ident_indexing(&id);
-                    self.push("=async ()=>(await nixInhR)");
+                    self.push("=");
+                    self.push(NIX_LAZY_START);
+                    self.push("nixInhR)");
                     self.translate_node_ident_indexing(&id);
+                    self.push(NIX_LAZY_HALFEND);
                     self.push(";");
                 }
-                self.push("})();");
+                if let Some(x) = &use_inhtmp {
+                    self.push("delete ");
+                    self.push(x);
+                } else {
+                    self.push("})()");
+                }
+                self.push(";");
             }
         } else {
             for id in inh.idents() {
@@ -375,10 +401,10 @@ impl Context<'_> {
         for i in node.entries() {
             self.translate_node_kv(i, scope)?;
         }
-        for i in node.inherits() {
-            self.translate_node_inherit(i, scope)?;
+        for (n, i) in node.inherits().enumerate() {
+            self.translate_node_inherit(i, scope, Some(format!("nixInhR{}", n)))?;
         }
-        self.push("return ");
+        self.push("return await ");
         match body {
             LetBody::Nix(body) => self.translate_node(body)?,
             LetBody::ExtractScope => self.push(&format!("{}[{}]", scope, NIX_EXTRACT_SCOPE)),
@@ -417,7 +443,7 @@ impl Context<'_> {
             Pt::Apply(app) => {
                 *self.lazyness_stack.last_mut().unwrap() = true;
                 if !omit_lazy {
-                    self.push("(async ()=>");
+                    self.push(NIX_LAZY_START);
                 }
                 self.push("(await (");
                 self.rtv(txtrng, app.lambda(), "lambda for application")?;
@@ -425,7 +451,7 @@ impl Context<'_> {
                 self.rtv(txtrng, app.value(), "value for application")?;
                 self.push(")");
                 if !omit_lazy {
-                    self.push(")()");
+                    self.push(NIX_LAZY_END);
                 }
             }
 
@@ -466,7 +492,7 @@ impl Context<'_> {
                 if let Some(op) = bo.operator() {
                     *self.lazyness_stack.last_mut().unwrap() = true;
                     if !omit_lazy {
-                        self.push("(async ()=>");
+                        self.push(NIX_LAZY_START);
                     }
                     use BinOpKind as Bok;
                     match op {
@@ -498,7 +524,7 @@ impl Context<'_> {
                         }
                     }
                     if !omit_lazy {
-                        self.push(")()");
+                        self.push(NIX_LAZY_END);
                     }
                 } else {
                     err!(format!(
@@ -526,7 +552,7 @@ impl Context<'_> {
             Pt::IfElse(ie) => {
                 *self.lazyness_stack.last_mut().unwrap() = true;
                 if !omit_lazy {
-                    self.push("(async ()=>");
+                    self.push(NIX_LAZY_START);
                 }
                 self.push("((await ");
                 self.rtv(txtrng, ie.condition(), "condition for if-else")?;
@@ -536,11 +562,11 @@ impl Context<'_> {
                 self.rtv(txtrng, ie.else_body(), "else-body for if-else")?;
                 self.push("))");
                 if !omit_lazy {
-                    self.push(")()");
+                    self.push(NIX_LAZY_END);
                 }
             }
 
-            Pt::Inherit(inh) => self.translate_node_inherit(inh, NIX_IN_SCOPE)?,
+            Pt::Inherit(inh) => self.translate_node_inherit(inh, NIX_IN_SCOPE, None)?,
 
             Pt::InheritFrom(inhf) => self.rtv(txtrng, inhf.inner(), "inner for inherit-from")?,
 
@@ -700,8 +726,10 @@ impl Context<'_> {
                     "or-default without indexing operation",
                 )?;
                 self.lazyness_stack.pop();
-                self.push("),async ()=>");
+                self.push("),");
+                self.push(NIX_LAZY_START);
                 self.rtv(txtrng, od.default(), "or-default without default")?;
+                self.push(NIX_LAZY_END);
                 self.push(")");
             }
 
@@ -718,7 +746,7 @@ impl Context<'_> {
             Pt::Select(sel) => {
                 *self.lazyness_stack.last_mut().unwrap() = true;
                 if !omit_lazy {
-                    self.push("(async ()=>");
+                    self.push(NIX_LAZY_START);
                 }
                 self.push("(await ");
                 self.rtv(txtrng, sel.set(), "set for select")?;
@@ -729,7 +757,7 @@ impl Context<'_> {
                     err!(format!("{:?}: {} missing", txtrng, "index for select"));
                 }
                 if !omit_lazy {
-                    self.push(")()");
+                    self.push(NIX_LAZY_END);
                 }
             }
 
