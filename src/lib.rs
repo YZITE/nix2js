@@ -424,12 +424,12 @@ impl Context<'_> {
                 self.rtv(txtrng, app.value(), "value for application")?;
                 self.push(")");
                 if !omit_lazy {
-                    self.push(")");
+                    self.push(")()");
                 }
             }
 
             Pt::Assert(art) => {
-                self.push("(()=>{");
+                self.push("(async ()=>{await ");
                 self.push(NIX_BUILTINS_RT);
                 self.push(".assert(");
                 let cond = if let Some(cond) = art.condition() {
@@ -497,7 +497,7 @@ impl Context<'_> {
                         }
                     }
                     if !omit_lazy {
-                        self.push(")");
+                        self.push(")()");
                     }
                 } else {
                     err!(format!(
@@ -535,7 +535,7 @@ impl Context<'_> {
                 self.rtv(txtrng, ie.else_body(), "else-body for if-else")?;
                 self.push("))");
                 if !omit_lazy {
-                    self.push(")");
+                    self.push(")()");
                 }
             }
 
@@ -728,7 +728,7 @@ impl Context<'_> {
                     err!(format!("{:?}: {} missing", txtrng, "index for select"));
                 }
                 if !omit_lazy {
-                    self.push(")");
+                    self.push(")()");
                 }
             }
 
@@ -805,7 +805,7 @@ impl Context<'_> {
             },
 
             Pt::With(with) => {
-                self.push(&format!("({}=>(", NIX_IN_SCOPE));
+                self.push(&format!("(async {}=>(", NIX_IN_SCOPE));
                 self.rtv(txtrng, with.body(), "body for 'with' scope")?;
                 self.push(&format!("))(nixBlti.mkScopeWith({},", NIX_IN_SCOPE));
                 self.rtv(txtrng, with.namespace(), "namespace for 'with' scope")?;
