@@ -432,7 +432,7 @@ export function initRtDep(nixRt) {
         },
         all: pred => async list => (await Promise.all(tyforce_list(await list).map(pred))).every(x => x),
         any: pred => async list => (await Promise.all(tyforce_list(await list).map(pred))).some(x => x),
-        assert: async cond => {
+        assert: (condstr: string) => async cond => {
             if (typeof cond === 'function') {
                 // async functions are still functions
                 cond = cond();
@@ -441,7 +441,7 @@ export function initRtDep(nixRt) {
             if (typeof cond2 !== 'boolean') {
                 throw TypeError("Assertion condition has wrong type (" + typeof cond2 + ")");
             }
-            assert (cond2);
+            assert (cond2, condstr);
         },
         attrNames:  async aset => Object.keys(await aset).sort(),
         attrValues: async aset => Object.entries(await aset).sort().map(a => a[1]),

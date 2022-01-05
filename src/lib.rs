@@ -432,6 +432,20 @@ impl Context<'_> {
                 self.push("(()=>{");
                 self.push(NIX_BUILTINS_RT);
                 self.push(".assert(");
+                let cond = if let Some(cond) = art.condition() {
+                    cond
+                } else {
+                    err!(format!(
+                        "line {}: condition for assert missing",
+                        self.txtrng_to_lineno(txtrng),
+                    ));
+                };
+                self.push(&escape_str(&format!(
+                    "line {}: {}",
+                    self.txtrng_to_lineno(txtrng),
+                    cond.text()
+                )));
+                self.push(",");
                 self.rtv(txtrng, art.condition(), "condition for assert")?;
                 self.push("); return (");
                 self.rtv(txtrng, art.body(), "body for assert")?;
