@@ -201,7 +201,7 @@ impl Context<'_> {
                 None => {
                     let insert_async = !*self.lazyness_stack.last().unwrap_or(&false);
                     if insert_async {
-                        self.push("(async ()=>");
+                        self.push("(async ()=>await ");
                     }
                     let startpos = self.acc.len();
                     self.push(NIX_IN_SCOPE);
@@ -371,7 +371,7 @@ impl Context<'_> {
             }
             return Ok(());
         }
-        self.push(&format!("(({})=>{{", scope));
+        self.push(&format!("(async {}=>{{", scope));
         for i in node.entries() {
             self.translate_node_kv(i, scope)?;
         }
