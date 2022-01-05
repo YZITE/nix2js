@@ -39,6 +39,7 @@ let b = await a({localSystem:{system:'x86_64-linux'}});
 
 ## TODO
 
+- reintroduce laziness (because just using promises results in too many errors)
 - nested attrset keys and non-recursive attrsets are implemented suboptimally
 - implement missing nix builtins (esp. those marked with `TODO:`)
   - `derivation` should create an object with a `realise` method
