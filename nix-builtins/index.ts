@@ -140,10 +140,10 @@ const splitVersion = s => s
     .map(x => x.split(/([A-Za-z]+|[0-9]+)/).filter((elem,idx) => idx%2))
     .flat();
 
-export function orDefault(selopf, dflf) {
+export async function orDefault<T>(selopf: () => Promise<T>, dflf: () => T): Promise<T> {
     let ret;
     try {
-        ret = selopf();
+        ret = await selopf();
     } catch (e) {
         // this is flaky...
         if (e instanceof TypeError && e.message.startsWith('Cannot read properties of undefined ')) {

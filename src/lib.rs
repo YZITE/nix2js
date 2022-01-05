@@ -20,8 +20,6 @@ use postracker::PosTracker;
 const NIX_BUILTINS_RT: &str = "nixBltiRT";
 const NIX_OPERATORS: &str = "nixOp";
 const NIX_EXTRACT_SCOPE: &str = "nixBlti.extractScope";
-const NIX_LAZY: &str = "nixBlti.Lazy";
-const NIX_FORCE: &str = "nixBlti.force";
 const NIX_OR_DEFAULT: &str = "nixBlti.orDefault";
 const NIX_RUNTIME: &str = "nixRt";
 const NIX_IN_SCOPE: &str = "nixInScope";
@@ -201,9 +199,9 @@ impl Context<'_> {
                     }
                 },
                 None => {
-                    let omit_lazy = *self.lazyness_stack.last().unwrap_or(&false);
-                    if !omit_lazy {
-                        self.push(&format!("new {}(()=>", NIX_LAZY));
+                    let insert_async = !*self.lazyness_stack.last().unwrap_or(&false);
+                    if insert_async {
+                        self.push("(async ()=>");
                     }
                     let startpos = self.acc.len();
                     self.push(NIX_IN_SCOPE);
@@ -212,10 +210,10 @@ impl Context<'_> {
                     } else {
                         format!("[{}]", escape_str(vn))
                     });
-                    ret = Some(self.acc[startpos..].to_string());
-                    if !omit_lazy {
+                    if insert_async {
                         self.push(")");
                     }
+                    ret = Some(self.acc[startpos..].to_string());
                 }
             },
         }
@@ -320,9 +318,7 @@ impl Context<'_> {
                 let id = idents.remove(0);
                 self.push(scope);
                 self.translate_node_ident_indexing(&id);
-                self.push("=new ");
-                self.push(NIX_LAZY);
-                self.push("(()=>(");
+                self.push("=async ()=>(await ");
                 self.rtv(
                     inhf.node().text_range(),
                     inhf.inner(),
@@ -330,25 +326,20 @@ impl Context<'_> {
                 )?;
                 self.push(")");
                 self.translate_node_ident_indexing(&id);
-                self.push(");");
             } else {
-                self.push("(function(){let nixInhR=");
-                self.push(NIX_FORCE);
-                self.push("(");
+                self.push("(()=>{let nixInhR=");
                 self.rtv(
                     inhf.node().text_range(),
                     inhf.inner(),
                     "inner for inherit-from",
                 )?;
-                self.push(");");
+                self.push(";");
                 for id in idents {
                     self.push(scope);
                     self.translate_node_ident_indexing(&id);
-                    self.push("=new ");
-                    self.push(NIX_LAZY);
-                    self.push("(()=>nixInhR");
+                    self.push("=async ()=>(await nixInhR)");
                     self.translate_node_ident_indexing(&id);
-                    self.push(");");
+                    self.push(";");
                 }
                 self.push("})();");
             }
@@ -425,11 +416,9 @@ impl Context<'_> {
             Pt::Apply(app) => {
                 *self.lazyness_stack.last_mut().unwrap() = true;
                 if !omit_lazy {
-                    self.push(&format!("new {}(()=>", NIX_LAZY));
+                    self.push("(async ()=>");
                 }
-                self.push("(");
-                self.push(NIX_FORCE);
-                self.push("(");
+                self.push("(await (");
                 self.rtv(txtrng, app.lambda(), "lambda for application")?;
                 self.push("))(");
                 self.rtv(txtrng, app.value(), "value for application")?;
@@ -462,21 +451,20 @@ impl Context<'_> {
                 if let Some(op) = bo.operator() {
                     *self.lazyness_stack.last_mut().unwrap() = true;
                     if !omit_lazy {
-                        self.push(&format!("new {}(()=>", NIX_LAZY));
+                        self.push("(async ()=>");
                     }
                     use BinOpKind as Bok;
                     match op {
                         Bok::IsSet => {
-                            self.push("Object.prototype.hasOwnProperty.call(");
+                            self.push("Object.prototype.hasOwnProperty.call(await ");
                             self.rtv(txtrng, bo.lhs(), "lhs for binop ?")?;
                             self.push(",");
                             if let Some(x) = bo.rhs() {
                                 if let Some(y) = Ident::cast(x.clone()) {
                                     self.translate_node_ident_escape_str(&y);
                                 } else {
-                                    self.push(&format!("{}(", NIX_FORCE));
+                                    self.push("await ");
                                     self.translate_node(x)?;
-                                    self.push(")");
                                 }
                             } else {
                                 err!(format!(
@@ -508,8 +496,7 @@ impl Context<'_> {
             Pt::Dynamic(d) => {
                 // dynamic key component
                 *self.lazyness_stack.last_mut().unwrap() = true;
-                self.push(NIX_FORCE);
-                self.push("(");
+                self.push("(await ");
                 self.rtv(txtrng, d.inner(), "inner for dynamic (key)")?;
                 self.push(")");
             }
@@ -524,11 +511,9 @@ impl Context<'_> {
             Pt::IfElse(ie) => {
                 *self.lazyness_stack.last_mut().unwrap() = true;
                 if !omit_lazy {
-                    self.push(&format!("new {}(()=>", NIX_LAZY));
+                    self.push("(async ()=>");
                 }
-                self.push("(");
-                self.push(NIX_FORCE);
-                self.push("(");
+                self.push("((await ");
                 self.rtv(txtrng, ie.condition(), "condition for if-else")?;
                 self.push(")?(");
                 self.rtv(txtrng, ie.body(), "if-body for if-else")?;
@@ -688,7 +673,7 @@ impl Context<'_> {
             }
 
             Pt::OrDefault(od) => {
-                self.push(&format!("{}(new {}(()=>(", NIX_OR_DEFAULT, NIX_LAZY));
+                self.push(&format!("{}(async ()=>(", NIX_OR_DEFAULT));
                 self.lazyness_stack.push(true);
                 self.rtv(
                     txtrng,
@@ -696,7 +681,7 @@ impl Context<'_> {
                     "or-default without indexing operation",
                 )?;
                 self.lazyness_stack.pop();
-                self.push(")),");
+                self.push("),()=>");
                 self.rtv(txtrng, od.default(), "or-default without default")?;
                 self.push(")");
             }
@@ -714,9 +699,9 @@ impl Context<'_> {
             Pt::Select(sel) => {
                 *self.lazyness_stack.last_mut().unwrap() = true;
                 if !omit_lazy {
-                    self.push(&format!("new {}(()=>", NIX_LAZY));
+                    self.push("(async ()=>");
                 }
-                self.push("(");
+                self.push("(await ");
                 self.rtv(txtrng, sel.set(), "set for select")?;
                 self.push(")");
                 if let Some(idx) = sel.index() {
@@ -748,7 +733,7 @@ impl Context<'_> {
                             match i {
                                 Sp::Literal(lit) => self.push(&escape_str(lit)),
                                 Sp::Ast(ast) => {
-                                    self.push(&format!("{}(", NIX_FORCE));
+                                    self.push("(await ");
                                     let txtrng = ast.node().text_range();
                                     self.rtv(txtrng, ast.inner(), "inner for str-interpolate")?;
                                     self.push(")");
@@ -767,16 +752,9 @@ impl Context<'_> {
                 match uo.operator() {
                     Uok::Invert | Uok::Negate => {}
                 }
-                *self.lazyness_stack.last_mut().unwrap() = true;
-                if !omit_lazy {
-                    self.push(&format!("new {}(()=>", NIX_LAZY));
-                }
                 self.push(&format!("{}.u_{:?}(", NIX_OPERATORS, uo.operator()));
                 self.rtv(txtrng, uo.value(), "value for unary-op")?;
                 self.push(")");
-                if !omit_lazy {
-                    self.push(")");
-                }
             }
 
             Pt::Value(v) => match v.to_value() {
