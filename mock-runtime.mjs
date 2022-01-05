@@ -20,6 +20,34 @@ function fmtTdif(tdif) {
 const rel_path_cache = {};
 const import_cache = {};
 
+async function importTail(real_path) {
+    const tstart = process.hrtime();
+    let fdat = null;
+    try {
+        fdat = await fs.readFile(real_path, 'utf8');
+    } catch(e) {
+        if (e.message.includes('illegal operation on a directory')) {
+            real_path = path.resolve(real_path, 'default.nix');
+            console.log('   -> retry with: ' + real_path);
+            fdat = await fs.readFile(real_path, 'utf8');
+        } else {
+            throw e;
+        }
+    }
+    console.log('  ' + fmtTdif(process.hrtime(tstart)) + '\tloaded');
+    let [trld, srcmap] = translate(fdat, real_path);
+    console.log('  ' + fmtTdif(process.hrtime(tstart)) + '\ttranslated');
+    let stru;
+    try {
+        stru = (new Function('nixRt', 'nixBlti', trld))(buildRT(real_path), nixBlti);
+    } catch (e) {
+        console.log(real_path, e);
+        throw e;
+    }
+    console.log('  ' + fmtTdif(process.hrtime(tstart)) + '\tevaluated');
+    return stru;
+}
+
 function buildRT(opath) {
     // get opath directory absolute.
     opath = path.resolve(opath);
@@ -27,6 +55,10 @@ function buildRT(opath) {
     return {
         export: expf,
         import: xpath => {
+            if (xpath instanceof Promise) {
+                // resolve path first
+                return (async () => await buildRT(opath).import(await xpath))();
+            }
             let real_path = null;
             let tmpp = null;
             if (xpath.startsWith(REL_PFX)) {
@@ -43,33 +75,7 @@ function buildRT(opath) {
             if (!(real_path in import_cache)) {
                 console.log(opath + ': called RT.import with path=' + xpath);
                 console.log('  -> resolved to: ' + real_path);
-                import_cache[real_path] = (async () => {
-                    const tstart = process.hrtime();
-                    let fdat = null;
-                    try {
-                        fdat = await fs.readFile(real_path, 'utf8');
-                    } catch(e) {
-                        if (e.message.includes('illegal operation on a directory')) {
-                            real_path = path.resolve(real_path, 'default.nix');
-                            console.log('   -> retry with: ' + real_path);
-                            fdat = await fs.readFile(real_path, 'utf8');
-                        } else {
-                            throw e;
-                        }
-                    }
-                    console.log('  ' + fmtTdif(process.hrtime(tstart)) + '\tloaded');
-                    let [trld, srcmap] = translate(fdat, real_path);
-                    console.log('  ' + fmtTdif(process.hrtime(tstart)) + '\ttranslated');
-                    let stru;
-                    try {
-                        stru = (new Function('nixRt', 'nixBlti', trld))(buildRT(real_path), nixBlti);
-                    } catch (e) {
-                        console.log(real_path, e);
-                        throw e;
-                    }
-                    console.log('  ' + fmtTdif(process.hrtime(tstart)) + '\tevaluated');
-                    return stru;
-                })();
+                import_cache[real_path] = importTail(real_path);
                 if (tmpp !== null) {
                     rel_path_cache[tmpp] = import_cache[real_path];
                 }

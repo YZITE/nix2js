@@ -328,7 +328,7 @@ impl Context<'_> {
                 self.translate_node_ident_indexing(&id);
                 self.push(";");
             } else {
-                self.push("(()=>{let nixInhR=");
+                self.push("(async ()=>{let nixInhR=");
                 self.rtv(
                     inhf.node().text_range(),
                     inhf.inner(),
@@ -700,7 +700,7 @@ impl Context<'_> {
                     "or-default without indexing operation",
                 )?;
                 self.lazyness_stack.pop();
-                self.push("),()=>");
+                self.push("),async ()=>");
                 self.rtv(txtrng, od.default(), "or-default without default")?;
                 self.push(")");
             }
