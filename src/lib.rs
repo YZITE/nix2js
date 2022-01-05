@@ -326,6 +326,7 @@ impl Context<'_> {
                 )?;
                 self.push(")");
                 self.translate_node_ident_indexing(&id);
+                self.push(";");
             } else {
                 self.push("(()=>{let nixInhR=");
                 self.rtv(
