@@ -140,10 +140,7 @@ impl Context<'_> {
 
     fn translate_node_key_element_force_str(&mut self, node: &NixNode) -> TranslateResult {
         if let Some(name) = Ident::cast(node.clone()) {
-            let txtrng = name.node().text_range();
-            let is_ident = self.snapshot_pos(txtrng.start(), false).is_some();
-            self.push(&escape_str(name.as_str()));
-            self.snapshot_pos(txtrng.end(), is_ident);
+            self.translate_node_ident_escape_str(&name);
         } else {
             self.translate_node(mksctx!(WantAwait, false), node.clone())?;
         }
@@ -337,9 +334,9 @@ impl Context<'_> {
                 // optimization: use real object
                 this.push("Object.assign(Object.create(null),{");
                 let inner = |this: &mut Self, i: KeyValue| {
-                    this.translate_node_key_element_force_str(
-                        &i.key().unwrap().path().next().unwrap(),
-                    )?;
+                    this.translate_node_ident_escape_str(
+                        &Ident::cast(i.key().unwrap().path().next().unwrap()).unwrap(),
+                    );
                     this.push(":");
                     this.translate_node(mksctx!(Normal, false), i.value().unwrap())?;
                     TranslateResult::Ok(())
@@ -736,7 +733,14 @@ impl Context<'_> {
                         ref sxs => {
                             this.push("(");
                             let mut fi = true;
-                            for i in sxs {
+                            for i in sxs.iter().filter(|i| {
+                                if let Sp::Literal(lit) = i {
+                                    if lit.is_empty() {
+                                        return false;
+                                    }
+                                }
+                                true
+                            }) {
                                 if fi {
                                     fi = false;
                                 } else {
