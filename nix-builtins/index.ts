@@ -140,9 +140,12 @@ const splitVersion = s => s
     .map(x => x.split(/([A-Za-z]+|[0-9]+)/).filter((elem,idx) => idx%2))
     .flat();
 
-export async function orDefault<T>(selopf: () => Promise<T>, dflf: () => T): Promise<T> {
+export async function orDefault<T>(selopf: () => MaybePromise<T>, dflf: () => MaybePromise<T>): Promise<T> {
     let ret;
     try {
+        if (typeof selopf !== 'function') {
+            console.trace("nix-blti.orDefault: selopf is not a function: ", selopf);
+        }
         ret = await selopf();
     } catch (e) {
         // this is flaky...
@@ -150,11 +153,12 @@ export async function orDefault<T>(selopf: () => Promise<T>, dflf: () => T): Pro
             console.debug("nix-blti.orDefault: encountered+catched TypeError:", e);
             return dflf();
         } else {
+            console.debug("nix-blti.orDefault: encountered+forwarded:", e);
             throw e;
         }
     }
     if (ret === undefined) {
-        ret = dflf();
+        ret = await dflf();
     }
     return ret;
 }
