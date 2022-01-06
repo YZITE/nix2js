@@ -68,9 +68,9 @@ impl Context<'_> {
             DidAwait
         };
         if sctx.insert_lazy {
-            self.push("(async ()=>(await ");
-            finisher.push("))()");
-            sctx.lazyness_st = DidAwait;
+            self.push("(async ()=>");
+            finisher.push(")()");
+            sctx.lazyness_st = WantAwait;
             sctx.insert_lazy = false;
         }
         let ret = inner(self, sctx);
