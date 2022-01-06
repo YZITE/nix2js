@@ -47,6 +47,7 @@ async function importTail(real_path) {
             console.log('   -> retry with: ' + real_path);
             fdat = await fs.readFile(real_path, 'utf8');
         } else {
+            console.log(real_path, e);
             throw e;
         }
     }
@@ -55,10 +56,15 @@ async function importTail(real_path) {
     console.log('  ' + fmtTdif(process.hrtime(tstart)) + '\ttranslated');
     let stru;
     try {
-        stru = (new Function('nixRt', 'nixBlti', trld))(buildRT(real_path), nixBlti);
+        stru = (new Function('nixRt', 'nixBlti', trld));
     } catch (e) {
         console.log(real_path, e);
-        import_cache[real_path] = Promise.reject(e);
+        throw e;
+    }
+    try {
+        stru = stru(buildRT(real_path), nixBlti);
+    } catch (e) {
+        console.log(real_path, e);
         throw e;
     }
     console.log('  ' + fmtTdif(process.hrtime(tstart)) + '\tevaluated');
@@ -81,6 +87,7 @@ function buildRT(opath) {
     return {
         'export': (anchor, xpath) => {
             console.log(opath + ': called RT.export with anchor=' + anchor + ' path=' + xpath);
+            //throw Error('loading prohibited');
             if (!xpath) {
                 throw Error(opath + ': null path');
             }
