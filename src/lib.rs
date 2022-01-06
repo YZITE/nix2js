@@ -94,12 +94,13 @@ impl Context<'_> {
         let mut ret = None;
         match vn {
             "builtins" => self.push(NIX_BUILTINS_RT),
-            "derivation" => {
-                // aliased name for derivation builtin
+            "abort" | "throw" | "derivation" => {
+                // aliased builtins
                 self.push(NIX_BUILTINS_RT);
-                self.push(".derivation");
+                self.push(".");
+                self.push(vn);
             }
-            "abort" | "import" | "throw" => {
+            "import" => {
                 self.push(NIX_RUNTIME);
                 self.push(".");
                 self.push(vn);
