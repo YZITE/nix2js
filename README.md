@@ -30,10 +30,12 @@ node
 ```
 inside of the node REPL, type the following to setup some baseline env:
 ```javascript
-let nixRtFe = await import('./mock-runtime.mjs');
 // we can import parts of nixpkgs,
 // going directly to `impure.nix` avoids confrontation with missing nix-version stuff
-let a = await nixRtFe.loadInitial('/path/to/nixpkgs/pkgs/top-level/impure.nix');
+// we must use an absolute path for the initial file
+
+let nixRtFe = await import('./mock-runtime.mjs');
+let a = await nixRtFe.import_(path.resolve(process.env.HOME,'devel/nixpkgs/pkgs/top-level/impure.nix'));
 let b = await a({localSystem:{system:'x86_64-linux'}});
 ```
 

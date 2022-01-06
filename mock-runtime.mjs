@@ -1,15 +1,8 @@
 import fs from 'node:fs/promises';
+import { constants as fsconsts } from 'node:fs';
 import path from 'node:path';
 import { translate } from 'nix2js-wasm';
 import * as nixBlti from 'nix-builtins';
-
-const REL_PFX = "Relative://";
-const ABS_PFX = "Absolute://";
-
-let expf = (anchor, xpath) => {
-    //console.log('called RT.export with anchor=' + anchor + ' path=' + xpath);
-    return anchor + '://' + xpath;
-};
 
 function fmtTdif(tdif) {
     let [secs, nanos] = tdif;
@@ -19,6 +12,29 @@ function fmtTdif(tdif) {
 
 const rel_path_cache = {};
 const import_cache = {};
+
+let nix_path_parsed = (() => {
+    let nixpath = process.env.NIX_PATH;
+    if (!nixpath) {
+        return undefined;
+    }
+    let parsed = {
+        lookup: {},
+        rest: [],
+    };
+    for (const i of nixpath.split(':')) {
+        let parts = i.split('=', 2);
+        switch(parts.length) {
+            case 1:
+                parsed.rest.push(i);
+                break;
+            case 2:
+                parsed.lookup[parts[0]] = parts[1];
+                break;
+        }
+    }
+    return parsed;
+});
 
 async function importTail(real_path) {
     const tstart = process.hrtime();
@@ -50,41 +66,58 @@ async function importTail(real_path) {
     return stru;
 }
 
+export function import_(xpath) {
+    if (xpath instanceof Promise)
+        return xpath.then(import_);
+    if (xpath instanceof Error)
+        throw xpath;
+    return import_cache[xpath] = importTail(xpath);
+}
+
 function buildRT(opath) {
     // get opath directory absolute.
     opath = path.resolve(opath);
     const dirnam = path.dirname(opath);
     return {
-        export: expf,
-        import: xpath => {
-            if (xpath instanceof Promise) {
-                // resolve path first
-                return (async () => await buildRT(opath).import(await xpath))();
+        'export': (anchor, xpath) => {
+            console.log(opath + ': called RT.export with anchor=' + anchor + ' path=' + xpath);
+            if (!xpath) {
+                throw Error(opath + ': null path');
             }
-            let real_path = null;
-            let tmpp = null;
-            if (xpath.startsWith(REL_PFX)) {
-                tmpp = dirnam + '|:' + xpath.slice(REL_PFX.length);
-                if (tmpp in rel_path_cache) {
-                    return rel_path_cache[tmpp];
-                }
-                real_path = path.resolve(dirnam, xpath.slice(REL_PFX.length));
-            } else if (xpath.startsWith(ABS_PFX)) {
-                real_path = path.resolve(xpath.slice(ABS_PFX.length));
-            } else {
-                throw Error(opath + ": import not supported: " + xpath);
+            switch (anchor) {
+                case "Relative":
+                    return path.resolve(dirnam, xpath);
+
+                case "Absolute":
+                    return path.resolve(xpath);
+
+                case "Home":
+                    return path.resolve(process.env.HOME, xpath);
+
+                // weirdly named anchor...
+                case "Store":
+                    if (!nix_path_parsed) {
+                        return Error(opath + ": export not supported: " + anchor + "|" + xpath);
+                    }
+                    let parts = xpath.split(path.sep);
+                    if (nix_path_parsed.lookup[parts[0]] !== undefined) {
+                        return path.resolve(nix_path_parsed.lookup[parts[0]], ... parts.slice(1));
+                    }
+                    return (async () => {
+                        for (const i of nix_path_parsed.rest) {
+                            let tmp = path.resolve(i, xpath);
+                            try {
+                                await fs.access(tmp, fsconsts.R_OK);
+                                return tmp;
+                            } catch(e) { }
+                        }
+                        return Error(opath + ": export did not resolve: " + anchor + "|" + xpath)
+                    })();
+
+                default:
+                    return Error(opath + ": export not supported: " + anchor + "|" + xpath);
             }
-            if (!(real_path in import_cache)) {
-                console.log(opath + ': called RT.import with path=' + xpath);
-                console.log('  -> resolved to: ' + real_path);
-                import_cache[real_path] = importTail(real_path);
-                if (tmpp !== null) {
-                    rel_path_cache[tmpp] = import_cache[real_path];
-                }
-            }
-            return import_cache[real_path];
-        }
+        },
+        'import': import_,
     };
 }
-
-export const loadInitial = ipath => buildRT(ipath)['import'](ABS_PFX+path.resolve(ipath));

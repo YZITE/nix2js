@@ -283,10 +283,7 @@ impl Context<'_> {
                     });
                     self.push(";");
                 }
-                if let Some(x) = &use_inhtmp {
-                    self.push("delete ");
-                    self.push(x);
-                } else {
+                if use_inhtmp.is_none() {
                     self.push("})()");
                 }
                 self.push(";");
@@ -570,12 +567,7 @@ impl Context<'_> {
                     self.vars.push((yas.to_string(), ScopedVar::LambdaArg));
                     self.translate_node_ident(None, &y);
                     self.push("=>(");
-                    self.rtv(
-                        BODY_SCTX,
-                        txtrng,
-                        lam.body(),
-                        "body for lambda",
-                    )?;
+                    self.rtv(BODY_SCTX, txtrng, lam.body(), "body for lambda")?;
                     assert!(self.vars.len() >= cur_lamstk);
                     self.vars.truncate(cur_lamstk);
                     self.push(")");
@@ -613,12 +605,7 @@ impl Context<'_> {
                     // FIXME: handle missing ellipsis
 
                     self.push("return ");
-                    self.rtv(
-                        BODY_SCTX,
-                        txtrng,
-                        lam.body(),
-                        "body for lambda",
-                    )?;
+                    self.rtv(BODY_SCTX, txtrng, lam.body(), "body for lambda")?;
                     assert!(self.vars.len() >= cur_lamstk);
                     self.vars.truncate(cur_lamstk);
                     self.push("}");
