@@ -324,6 +324,35 @@ impl Context<'_> {
         }
         // TODO: is Forward correct here?
         self.lazyness_incoming(body_sctx, LazyTr::Forward, |this, _| {
+            if scope != NIX_IN_SCOPE
+                && matches!(body, LetBody::ExtractScope)
+                && node.entries().all(|i| {
+                    i.value().is_some()
+                        && i.key().map(|j| {
+                            j.path().count() == 1 && Ident::cast(j.path().next().unwrap()).is_some()
+                        }) == Some(true)
+                })
+                && node.inherits().next().is_none()
+            {
+                // optimization: use real object
+                this.push("Object.assign(Object.create(null),{");
+                let inner = |this: &mut Self, i: KeyValue| {
+                    this.translate_node_key_element_force_str(
+                        &i.key().unwrap().path().next().unwrap(),
+                    )?;
+                    this.push(":");
+                    this.translate_node(mksctx!(Normal, false), i.value().unwrap())?;
+                    TranslateResult::Ok(())
+                };
+                let mut it = node.entries();
+                inner(this, it.next().unwrap())?;
+                for i in it {
+                    this.push(",");
+                    inner(this, i)?;
+                }
+                this.push("})");
+                return Ok(());
+            }
             this.push(&format!("(async {}=>{{", scope));
             for i in node.entries() {
                 this.translate_node_kv(value_sctx, i, scope)?;
@@ -651,21 +680,24 @@ impl Context<'_> {
             }
 
             Pt::OrDefault(od) => {
-                self.push(&format!("{}(", NIX_OR_DEFAULT));
-                self.rtv(
-                    mksctx!(Normal, true),
-                    txtrng,
-                    od.index().map(|i| i.node().clone()),
-                    "or-default without indexing operation",
-                )?;
-                self.push(",");
-                self.rtv(
-                    mksctx!(Normal, true),
-                    txtrng,
-                    od.default(),
-                    "or-default without default",
-                )?;
-                self.push(")");
+                self.lazyness_incoming(sctx, LazyTr::Need, |this, _| {
+                    this.push(&format!("{}(", NIX_OR_DEFAULT));
+                    this.rtv(
+                        mksctx!(Normal, true),
+                        txtrng,
+                        od.index().map(|i| i.node().clone()),
+                        "or-default without indexing operation",
+                    )?;
+                    this.push(",");
+                    this.rtv(
+                        mksctx!(Normal, true),
+                        txtrng,
+                        od.default(),
+                        "or-default without default",
+                    )?;
+                    this.push(")");
+                    TranslateResult::Ok(())
+                })?;
             }
 
             Pt::Paren(p) => self.rtv(sctx, txtrng, p.inner(), "inner for paren")?,
@@ -714,7 +746,7 @@ impl Context<'_> {
                                 match i {
                                     Sp::Literal(lit) => this.push(&escape_str(lit)),
                                     Sp::Ast(ast) => {
-                                        this.push("(await ");
+                                        this.push("(");
                                         let txtrng = ast.node().text_range();
                                         this.rtv(
                                             mksctx!(WantAwait, false),
