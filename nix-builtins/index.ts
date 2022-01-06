@@ -337,13 +337,18 @@ export const nixOp = {
             }
         }
     },
-    _lambdaA2chk: async function(attrs: object | Promise<object>, key: string): Promise<any> {
+    _lambdaA2chk: async function(attrs: object | Promise<object>, key: string, fallback?: Promise<any>): Promise<any> {
         attrs = await attrs;
-        if (attrs[key] === undefined) {
-            // TODO: adjust error message to what Nix currently issues.
-            throw new NixEvalError("Attrset element " + key + "missing at lambda call");
+        let tmp = await attrs[key];
+        if (tmp === undefined) {
+            if (fallback === undefined) {
+                // TODO: adjust error message to what Nix currently issues.
+                throw new NixEvalError("Attrset element " + key + "missing at lambda call");
+            } else {
+                tmp = await fallback;
+            }
         }
-        return attrs[key];
+        return tmp;
     },
     Concat: binop_helper("operator ++", function(a: any[], b: any[]) {
         if (typeof a !== 'object') {

@@ -17,18 +17,20 @@ use rnix::{types::*, SyntaxNode as NixNode};
 mod postracker;
 use postracker::PosTracker;
 
-const NIX_BUILTINS_RT: &str = "nixBltiRT";
-const NIX_OPERATORS: &str = "nixOp";
-const NIX_EXTRACT_SCOPE: &str = "nixBlti.extractScope";
-const NIX_OR_DEFAULT: &str = "nixBlti.orDefault";
-const NIX_RUNTIME: &str = "nixRt";
-const NIX_IN_SCOPE: &str = "nixInScope";
-const NIX_LAMBDA_ARG_PFX: &str = "nix__";
-const NIX_LAMBDA_BOUND: &str = "nixBound";
+mod consts {
+    pub const NIX_BUILTINS_RT: &str = "nixBltiRT";
+    pub const NIX_OPERATORS: &str = "nixOp";
+    pub const NIX_EXTRACT_SCOPE: &str = "nixBlti.extractScope";
+    pub const NIX_OR_DEFAULT: &str = "nixBlti.orDefault";
+    pub const NIX_RUNTIME: &str = "nixRt";
+    pub const NIX_IN_SCOPE: &str = "nixInScope";
+    pub const NIX_LAMBDA_ARG_PFX: &str = "nix__";
+    pub const NIX_LAMBDA_BOUND: &str = "nixBound";
+}
+use consts::*;
 
-const NIX_LAZY_START: &str = "(async ()=>(await ";
-const NIX_LAZY_HALFEND: &str = ")()";
-const NIX_LAZY_END: &str = "))()";
+mod helpers;
+use helpers::*;
 
 enum ScopedVar {
     LambdaArg,
@@ -38,7 +40,6 @@ struct Context<'a> {
     inp: &'a str,
     acc: &'a mut String,
     vars: Vec<(String, ScopedVar)>,
-    lazyness_stack: Vec<bool>,
     names: &'a mut Vec<String>,
     mappings: &'a mut Vec<u8>,
     // tracking positions for offset calc
@@ -46,104 +47,14 @@ struct Context<'a> {
     lp_dst: PosTracker,
 }
 
-fn attrelem_raw_safe(s: &str) -> bool {
-    !s.is_empty()
-        && s.chars().next().unwrap().is_ascii_alphabetic()
-        && !s.contains(|i: char| !i.is_ascii_alphanumeric())
-}
-
-fn escape_str(s: &str) -> String {
-    serde_json::value::Value::String(s.to_string()).to_string()
-}
-
-macro_rules! err {
-    ($x:expr) => {{
-        return Err(vec![$x]);
-    }};
-}
-
 enum LetBody {
     Nix(NixNode),
     ExtractScope,
 }
 
-type TranslateResult = Result<(), Vec<String>>;
+type TranslateResult = Result<(), String>;
 
 impl Context<'_> {
-    fn push(&mut self, x: &str) {
-        *self.acc += x;
-    }
-
-    fn snapshot_pos(&mut self, inpos: rnix::TextSize, is_ident: bool) -> Option<()> {
-        let (mut lp_src, mut lp_dst) = (self.lp_src, self.lp_dst);
-        let (ident, src_oline, src_ocol) =
-            lp_src.update(self.inp.as_bytes(), usize::from(inpos))?;
-        let (_, dst_oline, dst_ocol) = lp_dst.update(self.acc.as_bytes(), self.acc.len())?;
-        let (src_oline, src_ocol): (u32, u32) =
-            (src_oline.try_into().unwrap(), src_ocol.try_into().unwrap());
-        let (dst_oline, dst_ocol): (u32, u32) =
-            (dst_oline.try_into().unwrap(), dst_ocol.try_into().unwrap());
-
-        if dst_oline == 0 && dst_ocol == 0 && src_oline == 0 && src_ocol == 0 {
-            return Some(());
-        }
-
-        for _ in 0..dst_oline {
-            self.mappings.push(b';');
-        }
-        if dst_oline == 0 && !self.mappings.is_empty() {
-            self.mappings.push(b',');
-        }
-        use vlq::encode as vlqe;
-        vlqe(dst_ocol.into(), &mut self.mappings).unwrap();
-
-        if !(src_oline == 0 && src_ocol == 0) {
-            vlqe(0, self.mappings).unwrap();
-            vlqe(src_oline.into(), &mut self.mappings).unwrap();
-            vlqe(src_ocol.into(), &mut self.mappings).unwrap();
-            if is_ident {
-                if let Ok(ident) = std::str::from_utf8(ident) {
-                    // reuse ident if already present
-                    let idx = match self.names.iter().enumerate().find(|(_, i)| **i == ident) {
-                        Some((idx, _)) => idx,
-                        None => {
-                            let idx = self.names.len();
-                            self.names.push(ident.to_string());
-                            idx
-                        }
-                    };
-                    vlqe(idx.try_into().unwrap(), &mut self.mappings).unwrap();
-                }
-            }
-        }
-
-        self.lp_src = lp_src;
-        self.lp_dst = lp_dst;
-        Some(())
-    }
-
-    fn txtrng_to_lineno(&self, txtrng: rnix::TextRange) -> usize {
-        let bytepos: usize = txtrng.start().into();
-        self.inp
-            .char_indices()
-            .take_while(|(idx, _)| *idx <= bytepos)
-            .filter(|(_, c)| *c == '\n')
-            .count()
-    }
-
-    fn rtv(&mut self, txtrng: rnix::TextRange, x: Option<NixNode>, desc: &str) -> TranslateResult {
-        match x {
-            None => {
-                err!(format!(
-                    "line {}: {} missing",
-                    self.txtrng_to_lineno(txtrng),
-                    desc
-                ));
-            }
-            Some(x) => self.translate_node(x),
-        }
-    }
-
     fn translate_node_ident_escape_str(&mut self, id: &Ident) -> String {
         let txtrng = id.node().text_range();
         // if we don't make this conditional, we would record
@@ -170,7 +81,7 @@ impl Context<'_> {
         ret
     }
 
-    fn translate_node_ident(&mut self, id: &Ident) -> String {
+    fn translate_node_ident(&mut self, sctx: Option<StackCtx>, id: &Ident) -> String {
         let txtrng = id.node().text_range();
         // if we don't make this conditional, we would record
         // scrambled identifiers otherwise...
@@ -194,32 +105,30 @@ impl Context<'_> {
                 self.push(vn);
             }
             "false" | "true" | "null" => self.push(vn),
-            _ => match self.vars.iter().rev().find(|(ref i, _)| vn == i) {
-                Some((_, x)) => match x {
-                    // TODO: improve this
-                    Sv::LambdaArg => {
-                        self.push(NIX_LAMBDA_ARG_PFX);
-                        self.push(&vn.replace("-", "___"));
-                    }
-                },
-                None => {
-                    let insert_async = !*self.lazyness_stack.last().unwrap_or(&false);
-                    if insert_async {
-                        self.push(NIX_LAZY_START);
-                    }
-                    let startpos = self.acc.len();
-                    self.push(NIX_IN_SCOPE);
-                    self.push(&if attrelem_raw_safe(vn) {
-                        format!(".{}", vn)
-                    } else {
-                        format!("[{}]", escape_str(vn))
-                    });
-                    if insert_async {
-                        self.push(NIX_LAZY_END);
-                    }
-                    ret = Some(self.acc[startpos..].to_string());
+            _ => {
+                let mut inner =
+                    |this: &mut Self| match this.vars.iter().rev().find(|(ref i, _)| vn == i) {
+                        Some((_, Sv::LambdaArg)) => {
+                            this.push(NIX_LAMBDA_ARG_PFX);
+                            this.push(&vn.replace("-", "___"));
+                        }
+                        None => {
+                            let startpos = this.acc.len();
+                            this.push(NIX_IN_SCOPE);
+                            this.push(&if attrelem_raw_safe(vn) {
+                                format!(".{}", vn)
+                            } else {
+                                format!("[{}]", escape_str(vn))
+                            });
+                            ret = Some(this.acc[startpos..].to_string());
+                        }
+                    };
+                if let Some(sctx) = sctx {
+                    self.lazyness_incoming(sctx, LazyTr::Need, move |this, _| inner(this));
+                } else {
+                    inner(self);
                 }
-            },
+            }
         }
         self.snapshot_pos(txtrng.end(), is_ident);
         if let Some(x) = ret {
@@ -236,7 +145,7 @@ impl Context<'_> {
             self.push(&escape_str(name.as_str()));
             self.snapshot_pos(txtrng.end(), is_ident);
         } else {
-            self.translate_node(node.clone())?;
+            self.translate_node(mksctx!(WantAwait, false), node.clone())?;
         }
         Ok(())
     }
@@ -246,27 +155,34 @@ impl Context<'_> {
             self.translate_node_ident_indexing(&name);
         } else {
             self.push("[");
-            self.translate_node(node.clone())?;
+            self.translate_node(mksctx!(WantAwait, false), node.clone())?;
             self.push("]");
         }
         Ok(())
     }
 
-    fn translate_node_kv(&mut self, i: KeyValue, scope: &str) -> TranslateResult {
+    fn translate_node_kv(
+        &mut self,
+        value_sctx: StackCtx,
+        i: KeyValue,
+        scope: &str,
+    ) -> TranslateResult {
         let txtrng = i.node().text_range();
         let (kpfi, kpr);
         if let Some(key) = i.key() {
             let mut kpit = key.path();
             kpfi = match kpit.next() {
                 Some(kpfi) => kpfi,
-                None => err!(format!(
-                    "line {}: key for key-value pair missing",
-                    self.txtrng_to_lineno(txtrng)
-                )),
+                None => {
+                    return Err(format!(
+                        "line {}: key for key-value pair missing",
+                        self.txtrng_to_lineno(txtrng)
+                    ))
+                }
             };
             kpr = kpit.collect::<Vec<_>>();
         } else {
-            err!(format!(
+            return Err(format!(
                 "line {}: key for key-value pair missing",
                 self.txtrng_to_lineno(txtrng)
             ));
@@ -274,7 +190,7 @@ impl Context<'_> {
 
         let value = match i.value() {
             None => {
-                err!(format!(
+                return Err(format!(
                     "line {}: value for key-value pair missing",
                     self.txtrng_to_lineno(txtrng),
                 ));
@@ -286,7 +202,7 @@ impl Context<'_> {
             self.push(scope);
             self.translate_node_key_element_indexing(&kpfi)?;
             self.push("=");
-            self.translate_node(value)?;
+            self.translate_node(value_sctx, value)?;
             self.push(";");
         } else {
             self.push(&format!(
@@ -294,15 +210,15 @@ impl Context<'_> {
                 scope
             ));
             self.translate_node_key_element_force_str(&kpfi)?;
-            self.push(&format!(")){{{}", scope)); /* } */
+            self.push(&format!(")){}", scope)); /* } */
             self.translate_node_key_element_indexing(&kpfi)?;
-            self.push("=Object.create(null);}");
-            self.push(&format!("{}._deepMerge({}", NIX_OPERATORS, scope));
+            self.push("=Object.create(null)");
+            self.push(&format!("await {}._deepMerge({}", NIX_OPERATORS, scope));
             // this is a bit cheating because we directly override
             // parts of the attrset instead of round-tripping thru $`scope`.
             self.translate_node_key_element_indexing(&kpfi)?;
             self.push(",");
-            self.translate_node(value)?;
+            self.translate_node(value_sctx, value)?;
             for i in kpr {
                 self.push(",");
                 self.translate_node_key_element_force_str(&i)?;
@@ -314,52 +230,60 @@ impl Context<'_> {
 
     fn translate_node_inherit(
         &mut self,
+        value_sctx: StackCtx,
         inh: Inherit,
         scope: &str,
         use_inhtmp: Option<String>,
     ) -> TranslateResult {
         // inherit may be used in self-referential attrsets,
         // and omitting lazy there would be a bad idea.
-        self.lazyness_stack.push(true);
+        // FIXME: how?
         if let Some(inhf) = inh.from() {
             let mut idents: Vec<_> = inh.idents().collect();
+            let inhf_sctx = mksctx!(WantAwait, false);
             if idents.len() == 1 {
                 let id = idents.remove(0);
                 self.push(scope);
                 self.translate_node_ident_indexing(&id);
                 self.push("=");
-                self.push(NIX_LAZY_START);
-                self.rtv(
-                    inhf.node().text_range(),
-                    inhf.inner(),
-                    "inner for inherit-from",
-                )?;
-                self.push(")");
-                self.translate_node_ident_indexing(&id);
-                self.push(NIX_LAZY_HALFEND);
+                self.lazyness_incoming(value_sctx, LazyTr::Forward, |this, _| {
+                    this.rtv(
+                        inhf_sctx,
+                        inhf.node().text_range(),
+                        inhf.inner(),
+                        "inner for inherit-from",
+                    )?;
+                    this.translate_node_ident_indexing(&id);
+                    TranslateResult::Ok(())
+                })?;
                 self.push(";");
             } else {
-                if let Some(x) = &use_inhtmp {
+                let inhf_var = if let Some(x) = &use_inhtmp {
                     self.push("const ");
                     self.push(x);
+                    x
                 } else {
                     self.push("await (async ()=>{const nixInhR");
-                }
+                    "nixInhR"
+                };
                 self.push("=");
-                self.rtv(
-                    inhf.node().text_range(),
-                    inhf.inner(),
-                    "inner for inherit-from",
-                )?;
+                self.lazyness_incoming(inhf_sctx, LazyTr::Need, |this, sctx| {
+                    this.rtv(
+                        sctx,
+                        inhf.node().text_range(),
+                        inhf.inner(),
+                        "inner for inherit-from",
+                    )
+                })?;
                 self.push(";");
                 for id in idents {
                     self.push(scope);
                     self.translate_node_ident_indexing(&id);
                     self.push("=");
-                    self.push(NIX_LAZY_START);
-                    self.push("nixInhR)");
-                    self.translate_node_ident_indexing(&id);
-                    self.push(NIX_LAZY_HALFEND);
+                    self.lazyness_incoming(value_sctx, LazyTr::Forward, |this, _| {
+                        this.push(inhf_var);
+                        this.translate_node_ident_indexing(&id);
+                    });
                     self.push(";");
                 }
                 if let Some(x) = &use_inhtmp {
@@ -375,16 +299,17 @@ impl Context<'_> {
                 self.push(scope);
                 self.translate_node_ident_indexing(&id);
                 self.push("=");
-                self.translate_node_ident(&id);
+                self.translate_node_ident(Some(value_sctx), &id);
                 self.push(";");
             }
         }
-        self.lazyness_stack.pop();
         Ok(())
     }
 
     fn translate_let<EH: EntryHolder>(
         &mut self,
+        body_sctx: StackCtx,
+        value_sctx: StackCtx,
         node: &EH,
         body: LetBody,
         scope: &str,
@@ -392,32 +317,35 @@ impl Context<'_> {
         if node.entries().next().is_none() && node.inherits().next().is_none() {
             // empty attrset
             match body {
-                LetBody::Nix(body) => self.translate_node(body)?,
+                LetBody::Nix(body) => self.translate_node(body_sctx, body)?,
                 LetBody::ExtractScope => self.push("Object.create(null)"),
             }
             return Ok(());
         }
-        self.push(&format!("(async {}=>{{", scope));
-        for i in node.entries() {
-            self.translate_node_kv(i, scope)?;
-        }
-        for (n, i) in node.inherits().enumerate() {
-            self.translate_node_inherit(i, scope, Some(format!("nixInhR{}", n)))?;
-        }
-        self.push("return await ");
-        match body {
-            LetBody::Nix(body) => self.translate_node(body)?,
-            LetBody::ExtractScope => self.push(&format!("{}[{}]", scope, NIX_EXTRACT_SCOPE)),
-        }
-        self.push(";})(nixBlti.mkScope(");
-        if scope == NIX_IN_SCOPE {
-            self.push(NIX_IN_SCOPE);
-        }
-        self.push("))");
-        Ok(())
+        // TODO: is Forward correct here?
+        self.lazyness_incoming(body_sctx, LazyTr::Forward, |this, _| {
+            this.push(&format!("(async {}=>{{", scope));
+            for i in node.entries() {
+                this.translate_node_kv(value_sctx, i, scope)?;
+            }
+            for (n, i) in node.inherits().enumerate() {
+                this.translate_node_inherit(value_sctx, i, scope, Some(format!("nixInhR{}", n)))?;
+            }
+            this.push("return ");
+            match body {
+                LetBody::Nix(body) => this.translate_node(mksctx!(WantAwait, false), body)?,
+                LetBody::ExtractScope => this.push(&format!("{}[{}]", scope, NIX_EXTRACT_SCOPE)),
+            }
+            this.push(";})(nixBlti.mkScope(");
+            if scope == NIX_IN_SCOPE {
+                this.push(NIX_IN_SCOPE);
+            }
+            this.push("))");
+            Ok(())
+        })
     }
 
-    fn translate_node(&mut self, node: NixNode) -> TranslateResult {
+    fn translate_node(&mut self, sctx: StackCtx, node: NixNode) -> TranslateResult {
         if node.kind().is_trivia() {
             return Ok(());
         }
@@ -425,7 +353,7 @@ impl Context<'_> {
         let txtrng = node.text_range();
         let x = match ParsedType::try_from(node) {
             Err(e) => {
-                err!(format!(
+                return Err(format!(
                     "{:?} (line {}): unable to parse node of kind {:?}",
                     txtrng,
                     self.txtrng_to_lineno(txtrng),
@@ -436,47 +364,58 @@ impl Context<'_> {
         };
         use ParsedType as Pt;
 
-        let omit_lazy = *self.lazyness_stack.last().unwrap_or(&false);
-        self.lazyness_stack.push(false);
-
         match x {
             Pt::Apply(app) => {
-                *self.lazyness_stack.last_mut().unwrap() = true;
-                if !omit_lazy {
-                    self.push(NIX_LAZY_START);
-                }
-                self.push("(await (");
-                self.rtv(txtrng, app.lambda(), "lambda for application")?;
-                self.push("))(");
-                self.rtv(txtrng, app.value(), "value for application")?;
-                self.push(")");
-                if !omit_lazy {
-                    self.push(NIX_LAZY_END);
-                }
+                self.lazyness_incoming(sctx, LazyTr::Need, |this, _| {
+                    this.push("(");
+                    this.rtv(
+                        mksctx!(WantAwait, false),
+                        txtrng,
+                        app.lambda(),
+                        "lambda for application",
+                    )?;
+                    this.push(")(");
+                    this.rtv(
+                        mksctx!(Normal, false),
+                        txtrng,
+                        app.value(),
+                        "value for application",
+                    )?;
+                    this.push(")");
+                    TranslateResult::Ok(())
+                })?;
             }
 
             Pt::Assert(art) => {
-                self.push("(async ()=>{await ");
-                self.push(NIX_BUILTINS_RT);
-                self.push(".assert(");
-                let cond = if let Some(cond) = art.condition() {
-                    cond
-                } else {
-                    err!(format!(
-                        "line {}: condition for assert missing",
-                        self.txtrng_to_lineno(txtrng),
-                    ));
-                };
-                self.push(&escape_str(&format!(
-                    "line {}: {}",
-                    self.txtrng_to_lineno(txtrng),
-                    cond.text()
-                )));
-                self.push(",");
-                self.rtv(txtrng, art.condition(), "condition for assert")?;
-                self.push("); return (");
-                self.rtv(txtrng, art.body(), "body for assert")?;
-                self.push("); })()");
+                self.lazyness_incoming(sctx, LazyTr::Need, |this, _| {
+                    this.push("(async ()=>{await ");
+                    this.push(NIX_BUILTINS_RT);
+                    this.push(".assert(");
+                    let cond = if let Some(cond) = art.condition() {
+                        cond
+                    } else {
+                        return Err(format!(
+                            "line {}: condition for assert missing",
+                            this.txtrng_to_lineno(txtrng),
+                        ));
+                    };
+                    this.push(&escape_str(&format!(
+                        "line {}: {}",
+                        this.txtrng_to_lineno(txtrng),
+                        cond.text()
+                    )));
+                    this.push(",");
+                    this.translate_node(mksctx!(Normal, false), cond)?;
+                    this.push("); return (");
+                    this.rtv(
+                        mksctx!(WantAwait, false),
+                        txtrng,
+                        art.body(),
+                        "body for assert",
+                    )?;
+                    this.push("); })()");
+                    Ok(())
+                })?;
             }
 
             Pt::AttrSet(ars) => {
@@ -485,184 +424,176 @@ impl Context<'_> {
                 } else {
                     "nixAttrsScope"
                 };
-                self.translate_let(&ars, LetBody::ExtractScope, scope)?;
+                self.translate_let(
+                    sctx,
+                    mksctx!(Normal, true),
+                    &ars,
+                    LetBody::ExtractScope,
+                    scope,
+                )?;
             }
 
             Pt::BinOp(bo) => {
-                if let Some(op) = bo.operator() {
-                    *self.lazyness_stack.last_mut().unwrap() = true;
-                    if !omit_lazy {
-                        self.push(NIX_LAZY_START);
-                    }
-                    use BinOpKind as Bok;
-                    match op {
-                        Bok::IsSet => {
-                            self.push("Object.prototype.hasOwnProperty.call(await ");
-                            self.rtv(txtrng, bo.lhs(), "lhs for binop ?")?;
-                            self.push(",");
-                            if let Some(x) = bo.rhs() {
-                                if let Some(y) = Ident::cast(x.clone()) {
-                                    self.translate_node_ident_escape_str(&y);
-                                } else {
-                                    self.push("await ");
-                                    self.translate_node(x)?;
-                                }
-                            } else {
-                                err!(format!(
-                                    "line {}: rhs for binop ? missing",
-                                    self.txtrng_to_lineno(txtrng),
-                                ));
-                            }
-                            self.push(")");
-                        }
-                        _ => {
-                            self.push(&format!("{}.{:?}(", NIX_OPERATORS, op));
-                            self.rtv(txtrng, bo.lhs(), "lhs for binop")?;
-                            self.push(",");
-                            self.rtv(txtrng, bo.rhs(), "rhs for binop")?;
-                            self.push(")");
-                        }
-                    }
-                    if !omit_lazy {
-                        self.push(NIX_LAZY_END);
-                    }
+                let op = if let Some(op) = bo.operator() {
+                    op
                 } else {
-                    err!(format!(
+                    return Err(format!(
                         "line {}: operator for binop missing",
                         self.txtrng_to_lineno(txtrng),
                     ));
+                };
+                use BinOpKind as Bok;
+                match op {
+                    Bok::IsSet => {
+                        self.push("Object.prototype.hasOwnProperty.call(");
+                        self.rtv(
+                            mksctx!(WantAwait, false),
+                            txtrng,
+                            bo.lhs(),
+                            "lhs for binop ?",
+                        )?;
+                        self.push(",");
+                        if let Some(x) = bo.rhs() {
+                            if let Some(y) = Ident::cast(x.clone()) {
+                                self.translate_node_ident_escape_str(&y);
+                            } else {
+                                self.translate_node(mksctx!(WantAwait, false), x)?;
+                            }
+                        } else {
+                            return Err(format!(
+                                "line {}: rhs for binop ? missing",
+                                self.txtrng_to_lineno(txtrng),
+                            ));
+                        }
+                        self.push(")");
+                    }
+                    _ => {
+                        self.lazyness_incoming(sctx, LazyTr::Need, |this, _| {
+                            let mysctx = mksctx!(Normal, false);
+                            this.push(&format!("{}.{:?}(", NIX_OPERATORS, op));
+                            this.rtv(mysctx, txtrng, bo.lhs(), "lhs for binop")?;
+                            this.push(",");
+                            this.rtv(mysctx, txtrng, bo.rhs(), "rhs for binop")?;
+                            this.push(")");
+                            TranslateResult::Ok(())
+                        })?;
+                    }
                 }
             }
 
             Pt::Dynamic(d) => {
-                // dynamic key component
-                *self.lazyness_stack.last_mut().unwrap() = true;
-                self.push("(await ");
-                self.rtv(txtrng, d.inner(), "inner for dynamic (key)")?;
-                self.push(")");
+                self.rtv(sctx, txtrng, d.inner(), "inner for dynamic (key)")?;
             }
 
             // should be catched by `parsed.errors()...` in `translate(_)`
             Pt::Error(_) => unreachable!(),
 
             Pt::Ident(id) => {
-                self.translate_node_ident(&id);
+                self.translate_node_ident(Some(sctx), &id);
             }
 
             Pt::IfElse(ie) => {
-                *self.lazyness_stack.last_mut().unwrap() = true;
-                if !omit_lazy {
-                    self.push(NIX_LAZY_START);
-                }
-                self.push("((await ");
-                self.rtv(txtrng, ie.condition(), "condition for if-else")?;
-                self.push(")?(");
-                self.rtv(txtrng, ie.body(), "if-body for if-else")?;
-                self.push("):(");
-                self.rtv(txtrng, ie.else_body(), "else-body for if-else")?;
-                self.push("))");
-                if !omit_lazy {
-                    self.push(NIX_LAZY_END);
-                }
+                self.lazyness_incoming(sctx, LazyTr::Forward, |this, sctx| {
+                    this.push("((");
+                    this.rtv(
+                        mksctx!(WantAwait, false),
+                        txtrng,
+                        ie.condition(),
+                        "condition for if-else",
+                    )?;
+                    this.push(")?(");
+                    this.rtv(sctx, txtrng, ie.body(), "if-body for if-else")?;
+                    this.push("):(");
+                    this.rtv(sctx, txtrng, ie.else_body(), "else-body for if-else")?;
+                    this.push("))");
+                    TranslateResult::Ok(())
+                })?;
             }
 
-            Pt::Inherit(inh) => self.translate_node_inherit(inh, NIX_IN_SCOPE, None)?,
+            Pt::Inherit(inh) => self.translate_node_inherit(sctx, inh, NIX_IN_SCOPE, None)?,
 
-            Pt::InheritFrom(inhf) => self.rtv(txtrng, inhf.inner(), "inner for inherit-from")?,
-
-            Pt::Key(key) => {
-                let mut fi = true;
-                self.push("[");
-                for i in key.path() {
-                    if fi {
-                        fi = false;
-                    } else {
-                        self.push(",");
-                    }
-                    self.translate_node(i)?;
-                }
-                self.push("]");
+            Pt::InheritFrom(inhf) => {
+                self.rtv(sctx, txtrng, inhf.inner(), "inner for inherit-from")?
             }
 
+            Pt::Key(key) => unreachable!("standalone key not supported: {:?}", key),
             Pt::KeyValue(kv) => unreachable!("standalone key-value not supported: {:?}", kv),
 
             Pt::Lambda(lam) => {
-                if let Some(x) = lam.arg() {
-                    // FIXME: use guard to truncate vars
-                    let cur_lamstk = self.vars.len();
-                    self.push("(async ");
-                    if let Some(y) = Ident::cast(x.clone()) {
-                        let yas = y.as_str();
-                        self.vars.push((yas.to_string(), ScopedVar::LambdaArg));
-                        self.translate_node_ident(&y);
-                        self.push("=>(");
-                        self.rtv(txtrng, lam.body(), "body for lambda")?;
-                        assert!(self.vars.len() >= cur_lamstk);
-                        self.vars.truncate(cur_lamstk);
-                        self.push(")");
-                    } else if let Some(y) = Pattern::cast(x) {
-                        let argname = if let Some(z) = y.at() {
+                let argx = if let Some(x) = lam.arg() {
+                    x
+                } else {
+                    return Err(format!("lambda ({:?}) with missing argument", lam));
+                };
+                // FIXME: use guard to truncate vars
+                let cur_lamstk = self.vars.len();
+                self.push("(async ");
+                if let Some(y) = Ident::cast(argx.clone()) {
+                    let yas = y.as_str();
+                    self.vars.push((yas.to_string(), ScopedVar::LambdaArg));
+                    self.translate_node_ident(None, &y);
+                    self.push("=>(");
+                    self.rtv(
+                        mksctx!(Normal, false),
+                        txtrng,
+                        lam.body(),
+                        "body for lambda",
+                    )?;
+                    assert!(self.vars.len() >= cur_lamstk);
+                    self.vars.truncate(cur_lamstk);
+                    self.push(")");
+                } else if let Some(y) = Pattern::cast(argx) {
+                    let argname = if let Some(z) = y.at() {
+                        self.vars
+                            .push((z.as_str().to_string(), ScopedVar::LambdaArg));
+                        self.translate_node_ident(None, &z)
+                    } else {
+                        self.push(NIX_LAMBDA_BOUND);
+                        NIX_LAMBDA_BOUND.to_string()
+                    };
+                    self.push("=>{");
+                    self.push(&argname);
+                    self.push("=await ");
+                    self.push(&argname);
+                    self.push(";");
+                    for i in y.entries() {
+                        if let Some(z) = i.name() {
+                            self.push("let ");
                             self.vars
                                 .push((z.as_str().to_string(), ScopedVar::LambdaArg));
-                            self.translate_node_ident(&z)
-                        } else {
-                            self.push(NIX_LAMBDA_BOUND);
-                            NIX_LAMBDA_BOUND.to_string()
-                        };
-                        self.push("=>{");
-                        self.push(&argname);
-                        self.push("=await ");
-                        self.push(&argname);
-                        self.push(";");
-                        for i in y.entries() {
-                            if let Some(z) = i.name() {
-                                self.push("let ");
-                                self.vars
-                                    .push((z.as_str().to_string(), ScopedVar::LambdaArg));
-                                self.translate_node_ident(&z);
-                                self.push("=");
-                                if let Some(zdfl) = i.default() {
-                                    self.push("(");
-                                    let push_argzas = |this: &mut Context<'_>| {
-                                        this.push(&argname);
-                                        this.translate_node_ident_indexing(&z);
-                                    };
-                                    push_argzas(self);
-                                    self.push(" !==undefined)?(");
-                                    push_argzas(self);
-                                    self.push("):(");
-                                    self.translate_node(zdfl)?;
-                                    self.push(")");
-                                } else {
-                                    self.push(&format!(
-                                        "{}._lambdaA2chk({},",
-                                        NIX_OPERATORS, argname,
-                                    ));
-                                    self.translate_node_ident_escape_str(&z);
-                                    self.push(")");
-                                }
-                                self.push(";");
-                            } else {
-                                err!(format!("lambda pattern ({:?}) has entry without name", y));
+                            self.translate_node_ident(None, &z);
+                            self.push(&format!("={}._lambdaA2chk({},", NIX_OPERATORS, argname));
+                            self.translate_node_ident_escape_str(&z);
+                            if let Some(zdfl) = i.default() {
+                                self.push(",");
+                                self.translate_node(mksctx!(Normal, true), zdfl)?;
                             }
+                            self.push(");");
+                        } else {
+                            return Err(format!("lambda pattern ({:?}) has entry without name", y));
                         }
-                        // FIXME: handle missing ellipsis
-
-                        self.push("return ");
-                        self.rtv(txtrng, lam.body(), "body for lambda")?;
-                        assert!(self.vars.len() >= cur_lamstk);
-                        self.vars.truncate(cur_lamstk);
-                        self.push("}");
-                    } else {
-                        err!(format!("lambda ({:?}) with invalid argument", lam));
                     }
-                    self.push(")");
+                    // FIXME: handle missing ellipsis
+
+                    self.push("return ");
+                    self.rtv(
+                        mksctx!(WantAwait, false),
+                        txtrng,
+                        lam.body(),
+                        "body for lambda",
+                    )?;
+                    assert!(self.vars.len() >= cur_lamstk);
+                    self.vars.truncate(cur_lamstk);
+                    self.push("}");
                 } else {
-                    err!(format!("lambda ({:?}) with missing argument", lam));
+                    return Err(format!("lambda ({:?}) with invalid argument", lam));
                 }
+                self.push(")");
             }
 
             Pt::LegacyLet(l) => self.translate_let(
+                sctx,
+                mksctx!(Normal, true),
                 &l,
                 LetBody::Nix(
                     l.entries()
@@ -683,22 +614,24 @@ impl Context<'_> {
                         })
                         .and_then(|i| i.value())
                         .ok_or_else(|| {
-                            vec![format!(
+                            format!(
                                 "line {}: legacy let {{ ... }} without body assignment",
                                 self.txtrng_to_lineno(l.node().text_range())
-                            )]
+                            )
                         })?,
                 ),
                 NIX_IN_SCOPE,
             )?,
 
             Pt::LetIn(l) => self.translate_let(
+                sctx,
+                mksctx!(Normal, true),
                 &l,
                 LetBody::Nix(l.body().ok_or_else(|| {
-                    vec![format!(
+                    format!(
                         "line {}: let ... in ... without body",
                         self.txtrng_to_lineno(l.node().text_range())
-                    )]
+                    )
                 })?),
                 NIX_IN_SCOPE,
             )?,
@@ -712,28 +645,30 @@ impl Context<'_> {
                     } else {
                         self.push(",");
                     }
-                    self.translate_node(i)?;
+                    self.translate_node(mksctx!(Normal, false), i)?;
                 }
                 self.push("]");
             }
 
             Pt::OrDefault(od) => {
-                self.push(&format!("{}(async ()=>(", NIX_OR_DEFAULT));
-                self.lazyness_stack.push(true);
+                self.push(&format!("{}(", NIX_OR_DEFAULT));
                 self.rtv(
+                    mksctx!(Normal, true),
                     txtrng,
                     od.index().map(|i| i.node().clone()),
                     "or-default without indexing operation",
                 )?;
-                self.lazyness_stack.pop();
-                self.push("),");
-                self.push(NIX_LAZY_START);
-                self.rtv(txtrng, od.default(), "or-default without default")?;
-                self.push(NIX_LAZY_END);
+                self.push(",");
+                self.rtv(
+                    mksctx!(Normal, true),
+                    txtrng,
+                    od.default(),
+                    "or-default without default",
+                )?;
                 self.push(")");
             }
 
-            Pt::Paren(p) => self.rtv(txtrng, p.inner(), "inner for paren")?,
+            Pt::Paren(p) => self.rtv(sctx, txtrng, p.inner(), "inner for paren")?,
             Pt::PathWithInterpol(p) => {
                 unreachable!("standalone path-with-interpolation not supported: {:?}", p)
             }
@@ -741,58 +676,69 @@ impl Context<'_> {
             Pt::PatBind(p) => unreachable!("standalone pattern @ bind not supported: {:?}", p),
             Pt::PatEntry(p) => unreachable!("standalone pattern entry not supported: {:?}", p),
 
-            Pt::Root(r) => self.rtv(txtrng, r.inner(), "inner for root")?,
+            Pt::Root(r) => self.rtv(sctx, txtrng, r.inner(), "inner for root")?,
 
             Pt::Select(sel) => {
-                *self.lazyness_stack.last_mut().unwrap() = true;
-                if !omit_lazy {
-                    self.push(NIX_LAZY_START);
-                }
-                self.push("(await ");
-                self.rtv(txtrng, sel.set(), "set for select")?;
-                self.push(")");
-                if let Some(idx) = sel.index() {
-                    self.translate_node_key_element_indexing(&idx)?;
-                } else {
-                    err!(format!("{:?}: {} missing", txtrng, "index for select"));
-                }
-                if !omit_lazy {
-                    self.push(NIX_LAZY_END);
-                }
+                self.lazyness_incoming(sctx, LazyTr::Need, |this, _| {
+                    this.rtv(
+                        mksctx!(WantAwait, false),
+                        txtrng,
+                        sel.set(),
+                        "set for select",
+                    )?;
+                    if let Some(idx) = sel.index() {
+                        this.translate_node_key_element_indexing(&idx)?;
+                    } else {
+                        return Err(format!("{:?}: {} missing", txtrng, "index for select"));
+                    }
+                    TranslateResult::Ok(())
+                })?;
             }
 
             Pt::Str(s) => {
-                *self.lazyness_stack.last_mut().unwrap() = true;
                 use rnix::value::StrPart as Sp;
-                match s.parts()[..] {
-                    [] => self.push("\"\""),
-                    [Sp::Literal(ref lit)] => self.push(&escape_str(lit)),
-                    ref sxs => {
-                        self.push("(");
-                        let mut fi = true;
-                        for i in sxs {
-                            if fi {
-                                fi = false;
-                            } else {
-                                self.push("+");
-                            }
+                self.lazyness_incoming(sctx, LazyTr::Forward, |this, _| {
+                    match s.parts()[..] {
+                        [] => this.push("\"\""),
+                        [Sp::Literal(ref lit)] => this.push(&escape_str(lit)),
+                        ref sxs => {
+                            this.push("(");
+                            let mut fi = true;
+                            for i in sxs {
+                                if fi {
+                                    fi = false;
+                                } else {
+                                    this.push("+");
+                                }
 
-                            match i {
-                                Sp::Literal(lit) => self.push(&escape_str(lit)),
-                                Sp::Ast(ast) => {
-                                    self.push("(await ");
-                                    let txtrng = ast.node().text_range();
-                                    self.rtv(txtrng, ast.inner(), "inner for str-interpolate")?;
-                                    self.push(")");
+                                match i {
+                                    Sp::Literal(lit) => this.push(&escape_str(lit)),
+                                    Sp::Ast(ast) => {
+                                        this.push("(await ");
+                                        let txtrng = ast.node().text_range();
+                                        this.rtv(
+                                            mksctx!(WantAwait, false),
+                                            txtrng,
+                                            ast.inner(),
+                                            "inner for str-interpolate",
+                                        )?;
+                                        this.push(")");
+                                    }
                                 }
                             }
+                            this.push(")");
                         }
-                        self.push(")");
                     }
-                }
+                    TranslateResult::Ok(())
+                })?;
             }
 
-            Pt::StrInterpol(si) => self.rtv(txtrng, si.inner(), "inner for str-interpolate")?,
+            Pt::StrInterpol(si) => self.rtv(
+                mksctx!(WantAwait, false),
+                txtrng,
+                si.inner(),
+                "inner for str-interpolate",
+            )?,
 
             Pt::UnaryOp(uo) => {
                 use UnaryOpKind as Uok;
@@ -800,7 +746,12 @@ impl Context<'_> {
                     Uok::Invert | Uok::Negate => {}
                 }
                 self.push(&format!("{}.u_{:?}(", NIX_OPERATORS, uo.operator()));
-                self.rtv(txtrng, uo.value(), "value for unary-op")?;
+                self.rtv(
+                    mksctx!(Normal, false),
+                    txtrng,
+                    uo.value(),
+                    "value for unary-op",
+                )?;
                 self.push(")");
             }
 
@@ -826,23 +777,33 @@ impl Context<'_> {
                     };
                     self.push(&jsvs);
                 }
-                Err(e) => err!(format!(
-                    "line {}: value deserialization error: {}",
-                    self.txtrng_to_lineno(txtrng),
-                    e
-                )),
+                Err(e) => {
+                    return Err(format!(
+                        "line {}: value deserialization error: {}",
+                        self.txtrng_to_lineno(txtrng),
+                        e
+                    ))
+                }
             },
 
             Pt::With(with) => {
                 self.push(&format!("(async {}=>(", NIX_IN_SCOPE));
-                self.rtv(txtrng, with.body(), "body for 'with' scope")?;
+                self.rtv(
+                    mksctx!(WantAwait, false),
+                    txtrng,
+                    with.body(),
+                    "body for 'with' scope",
+                )?;
                 self.push(&format!("))(nixBlti.mkScopeWith({},", NIX_IN_SCOPE));
-                self.rtv(txtrng, with.namespace(), "namespace for 'with' scope")?;
+                self.rtv(
+                    mksctx!(WantAwait, false),
+                    txtrng,
+                    with.namespace(),
+                    "namespace for 'with' scope",
+                )?;
                 self.push("))");
             }
         }
-
-        self.lazyness_stack.pop();
 
         Ok(())
     }
@@ -871,17 +832,20 @@ pub fn translate(s: &str, inp_name: &str) -> Result<(String, String), Vec<String
     ret += "=nixBlti.initRtDep(nixRt);let ";
     ret += NIX_IN_SCOPE;
     ret += "=nixBlti.mkScopeWith();return ";
-    Context {
+    match (Context {
         inp: s,
         acc: &mut ret,
         vars: Default::default(),
-        lazyness_stack: Vec::new(),
         names: &mut names,
         mappings: &mut mappings,
         lp_src: Default::default(),
         lp_dst: Default::default(),
     }
-    .translate_node(parsed.node())?;
+    .translate_node(mksctx!(Normal, true), parsed.node()))
+    {
+        Ok(()) => {}
+        Err(e) => return Err(vec![e]),
+    }
     ret += ";";
     let mappings = String::from_utf8(mappings).unwrap();
     Ok((
