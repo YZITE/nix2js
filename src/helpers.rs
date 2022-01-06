@@ -32,7 +32,7 @@ pub struct StackCtx {
 
 #[macro_export]
 macro_rules! mksctx {
-    ($x:ident, $il:ident) => {{
+    ($x:ident, $il:expr) => {{
         StackCtx {
             lazyness_st: crate::helpers::LazynessSt::$x,
             insert_lazy: $il,

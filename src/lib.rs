@@ -426,7 +426,7 @@ impl Context<'_> {
                 };
                 self.translate_let(
                     sctx,
-                    mksctx!(Normal, true),
+                    mksctx!(Normal, ars.recursive()),
                     &ars,
                     LetBody::ExtractScope,
                     scope,
