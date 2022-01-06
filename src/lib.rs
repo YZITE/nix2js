@@ -320,17 +320,17 @@ impl Context<'_> {
             return Ok(());
         }
         // TODO: is Forward correct here?
-        self.lazyness_incoming(body_sctx, LazyTr::Forward, |this, _| {
-            if scope != NIX_IN_SCOPE
-                && matches!(body, LetBody::ExtractScope)
-                && node.entries().all(|i| {
-                    i.value().is_some()
-                        && i.key().map(|j| {
-                            j.path().count() == 1 && Ident::cast(j.path().next().unwrap()).is_some()
-                        }) == Some(true)
-                })
-                && node.inherits().next().is_none()
-            {
+        if scope != NIX_IN_SCOPE
+            && matches!(body, LetBody::ExtractScope)
+            && node.entries().all(|i| {
+                i.value().is_some()
+                    && i.key().map(|j| {
+                        j.path().count() == 1 && Ident::cast(j.path().next().unwrap()).is_some()
+                    }) == Some(true)
+            })
+            && node.inherits().next().is_none()
+        {
+            self.lazyness_incoming(body_sctx, LazyTr::Forward, |this, _| {
                 // optimization: use real object
                 this.push("Object.assign(Object.create(null),{");
                 let inner = |this: &mut Self, i: KeyValue| {
@@ -348,27 +348,37 @@ impl Context<'_> {
                     inner(this, i)?;
                 }
                 this.push("})");
-                return Ok(());
-            }
-            this.push(&format!("(async {}=>{{", scope));
-            for i in node.entries() {
-                this.translate_node_kv(value_sctx, i, scope)?;
-            }
-            for (n, i) in node.inherits().enumerate() {
-                this.translate_node_inherit(value_sctx, i, scope, Some(format!("nixInhR{}", n)))?;
-            }
-            this.push("return ");
-            match body {
-                LetBody::Nix(body) => this.translate_node(mksctx!(WantAwait, false), body)?,
-                LetBody::ExtractScope => this.push(&format!("{}[{}]", scope, NIX_EXTRACT_SCOPE)),
-            }
-            this.push(";})(nixBlti.mkScope(");
-            if scope == NIX_IN_SCOPE {
-                this.push(NIX_IN_SCOPE);
-            }
-            this.push("))");
-            Ok(())
-        })
+                Ok(())
+            })
+        } else {
+            self.lazyness_incoming(body_sctx, LazyTr::Need, |this, _| {
+                this.push(&format!("(async {}=>{{", scope));
+                for i in node.entries() {
+                    this.translate_node_kv(value_sctx, i, scope)?;
+                }
+                for (n, i) in node.inherits().enumerate() {
+                    this.translate_node_inherit(
+                        value_sctx,
+                        i,
+                        scope,
+                        Some(format!("nixInhR{}", n)),
+                    )?;
+                }
+                this.push("return ");
+                match body {
+                    LetBody::Nix(body) => this.translate_node(mksctx!(WantAwait, false), body)?,
+                    LetBody::ExtractScope => {
+                        this.push(&format!("{}[{}]", scope, NIX_EXTRACT_SCOPE))
+                    }
+                }
+                this.push(";})(nixBlti.mkScope(");
+                if scope == NIX_IN_SCOPE {
+                    this.push(NIX_IN_SCOPE);
+                }
+                this.push("))");
+                Ok(())
+            })
+        }
     }
 
     fn translate_node(&mut self, sctx: StackCtx, node: NixNode) -> TranslateResult {
@@ -553,6 +563,7 @@ impl Context<'_> {
                 };
                 // FIXME: use guard to truncate vars
                 let cur_lamstk = self.vars.len();
+                const BODY_SCTX: StackCtx = mksctx!(WantAwait, false);
                 self.push("(async ");
                 if let Some(y) = Ident::cast(argx.clone()) {
                     let yas = y.as_str();
@@ -560,7 +571,7 @@ impl Context<'_> {
                     self.translate_node_ident(None, &y);
                     self.push("=>(");
                     self.rtv(
-                        mksctx!(Normal, false),
+                        BODY_SCTX,
                         txtrng,
                         lam.body(),
                         "body for lambda",
@@ -603,7 +614,7 @@ impl Context<'_> {
 
                     self.push("return ");
                     self.rtv(
-                        mksctx!(WantAwait, false),
+                        BODY_SCTX,
                         txtrng,
                         lam.body(),
                         "body for lambda",
