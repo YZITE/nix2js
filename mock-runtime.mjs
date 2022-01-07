@@ -126,5 +126,6 @@ function buildRT(opath) {
             }
         },
         'import': import_,
+        'pathExists': async xpath => await fs.access(await xpath, fsconsts.R_OK),
     };
 }

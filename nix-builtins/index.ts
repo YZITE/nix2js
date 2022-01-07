@@ -730,7 +730,9 @@ const IndepBltis = {
     return fixObjectProto({ right, wrong });
   },
 
-  // TODO: path, pathExists, placeholder
+  // TODO: path, placeholder
+  // omitted: pathExists
+  // TODO: placeholder
   // omitted: readDir, readFile
 
   removeAttrs: (aset) => async (list) => {
@@ -838,6 +840,7 @@ export function initRtDep(nixRt) {
     "hashFile",
     "hashString",
     "import",
+    "pathExists",
     "readDir",
     "readFile",
     "storePath",
