@@ -2,6 +2,7 @@
 
 import * as _ from 'lodash-es';
 import assert from 'webassert';
+import PLazy from 'p-lazy';
 export { default as PLazy } from 'p-lazy';
 
 export const API_VERSION = 0;
@@ -141,22 +142,21 @@ const splitVersion = s => s
     .map(x => x.split(/([A-Za-z]+|[0-9]+)/).filter((elem,idx) => idx%2))
     .flat();
 
-export async function orDefault<T>(selopf: Promise<T>, dflf: () => MaybePromise<T>): Promise<T> {
-    let ret;
+export async function orDefault<T>(selopf: T | PLazy<T>, dflf: T | PLazy<T>): Promise<T> {
+    let ret = undefined;
     try {
         ret = await selopf;
     } catch (e) {
         // this is flaky...
         if (e instanceof TypeError && e.message.startsWith('Cannot read properties of undefined ')) {
             console.debug("nix-blti.orDefault: encountered+catched TypeError:", e);
-            return dflf();
         } else {
             console.debug("nix-blti.orDefault: encountered+forwarded:", e);
             throw e;
         }
     }
     if (ret === undefined) {
-        ret = await dflf();
+        ret = await dflf;
     }
     return ret;
 }

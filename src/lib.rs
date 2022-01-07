@@ -717,7 +717,7 @@ impl Context<'_> {
                         od.index().map(|i| i.node().clone()),
                         "or-default without indexing operation",
                     )?;
-                    this.push(",()=>");
+                    this.push(",");
                     this.rtv(
                         mksctx!(Nothing, Want),
                         txtrng,
