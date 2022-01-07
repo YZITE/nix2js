@@ -11,14 +11,14 @@ pub fn escape_str(s: &str) -> String {
     serde_json::value::Value::String(s.to_string()).to_string()
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum St {
     Did,
     Want,
     Nothing,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Tr {
     Need,
     Forward,
@@ -85,6 +85,12 @@ impl Context<'_> {
             finisher.push(")");
             sctx.await_st = St::Want;
             sctx.lazy_st = St::Nothing;
+
+            if await_tr != Tr::Forward {
+                self.push("(await ");
+                finisher.push(")");
+                sctx.await_st = St::Did;
+            }
         }
         let ret = inner(self, sctx);
         for i in finisher.iter().rev() {

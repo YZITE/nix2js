@@ -406,25 +406,23 @@ impl Context<'_> {
 
         match x {
             Pt::Apply(app) => {
-                self.lazyness_incoming(sctx, Tr::Need, Tr::Need, |this, sctx| {
-                    this.lazyness_incoming(sctx, Tr::Need, Tr::Forward, |this, _| {
-                        this.push("(");
-                        this.rtv(
-                            mksctx!(Want, Nothing),
-                            txtrng,
-                            app.lambda(),
-                            "lambda for application",
-                        )?;
-                        this.push(")(");
-                        this.rtv(
-                            mksctx!(Nothing, Nothing),
-                            txtrng,
-                            app.value(),
-                            "value for application",
-                        )?;
-                        this.push(")");
-                        TranslateResult::Ok(())
-                    })
+                self.lazyness_incoming(sctx, Tr::Need, Tr::Need, |this, _sctx| {
+                    this.push("(");
+                    this.rtv(
+                        mksctx!(Want, Nothing),
+                        txtrng,
+                        app.lambda(),
+                        "lambda for application",
+                    )?;
+                    this.push(")(");
+                    this.rtv(
+                        mksctx!(Nothing, Nothing),
+                        txtrng,
+                        app.value(),
+                        "value for application",
+                    )?;
+                    this.push(")");
+                    TranslateResult::Ok(())
                 })?;
             }
 
@@ -499,7 +497,7 @@ impl Context<'_> {
                         self.push(")");
                     }
                     _ => {
-                        self.lazyness_incoming(sctx, Tr::Need, Tr::Need, |this, _| {
+                        self.lazyness_incoming(sctx, Tr::Need, Tr::Flush, |this, _| {
                             let mysctx = mksctx!(Nothing, Nothing);
                             this.push(&format!("{}.{:?}(", NIX_OPERATORS, op));
                             this.rtv(mysctx, txtrng, bo.lhs(), "lhs for binop")?;
@@ -589,6 +587,8 @@ impl Context<'_> {
                             self.vars
                                 .push((z.as_str().to_string(), ScopedVar::LambdaArg));
                             self.translate_node_ident(None, &z);
+                            // NOTE: it should be unnecessary to insert `await` here,
+                            // instead, it is inserted at the usage sites.
                             self.push(&format!("={}._lambdaA2chk({},", NIX_OPERATORS, argname));
                             self.translate_node_ident_escape_str(&z);
                             if let Some(zdfl) = i.default() {

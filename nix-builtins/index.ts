@@ -339,8 +339,7 @@ export const nixOp = {
             }
         }
     },
-    _lambdaA2chk: async function(attrs: object | Promise<object>, key: string, fallback?: Promise<any>): Promise<any> {
-        attrs = await attrs;
+    _lambdaA2chk: async function(attrs: object, key: string, fallback?: Promise<any>): Promise<any> {
         let tmp = await attrs[key];
         if (tmp === undefined) {
             if (fallback === undefined) {
