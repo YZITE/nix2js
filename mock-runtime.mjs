@@ -44,7 +44,6 @@ async function importTail(real_path) {
     } catch(e) {
         if (e.message.includes('illegal operation on a directory')) {
             real_path = path.resolve(real_path, 'default.nix');
-            console.log('   -> retry with: ' + real_path);
             fdat = await fs.readFile(real_path, 'utf8');
         } else {
             console.log(real_path, e);
