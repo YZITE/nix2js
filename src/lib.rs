@@ -212,7 +212,7 @@ impl Context<'_> {
             self.translate_node_key_element_force_str(&kpfi)?;
             self.push(&format!(")){}", scope)); /* } */
             self.translate_node_key_element_indexing(&kpfi)?;
-            self.push("=Object.create(null)");
+            self.push("=Object.create(null);");
             self.push(&format!("await {}._deepMerge({}", NIX_OPERATORS, scope));
             // this is a bit cheating because we directly override
             // parts of the attrset instead of round-tripping thru $`scope`.
