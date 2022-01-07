@@ -47,28 +47,23 @@ async function importTail(real_path) {
             fdat = await fs.readFile(real_path, 'utf8');
         } else {
             console.log(real_path, e);
-            throw e;
+            throw NixEvalError(e.stack);
         }
     }
-    console.log('  ' + fmtTdif(process.hrtime(tstart)) + '\tloaded');
-    let trld = translate_inline_srcmap(fdat, real_path);
-    console.log('  ' + fmtTdif(process.hrtime(tstart)) + '\ttranslated');
-    let stru;
     try {
+        console.log('  ' + fmtTdif(process.hrtime(tstart)) + '\tloaded');
+        let trld = translate_inline_srcmap(fdat, real_path);
+        console.log('  ' + fmtTdif(process.hrtime(tstart)) + '\ttranslated');
+        let stru;
         stru = (new Function('nixRt', 'nixBlti', trld));
-    } catch (e) {
-        console.log(real_path, e);
-        throw e;
-    }
-    try {
         stru = stru(buildRT(real_path), nixBlti);
+        console.log('  ' + fmtTdif(process.hrtime(tstart)) + '\tevaluated');
+        import_cache[real_path] = stru;
+        return stru;
     } catch (e) {
         console.log(real_path, e);
-        throw e;
+        throw NixEvalError(e.stack);
     }
-    console.log('  ' + fmtTdif(process.hrtime(tstart)) + '\tevaluated');
-    import_cache[real_path] = stru;
-    return stru;
 }
 
 export function import_(xpath) {
