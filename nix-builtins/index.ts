@@ -513,319 +513,337 @@ export const nixOp = {
   }),
 };
 
-export function initRtDep(nixRt) {
-  return {
-    abort: async (s) => {
-      throw new NixAbortError(tyforce_string(await s));
-    },
-    add: (a) =>
-      async function (b) {
-        a = await a;
-        b = await b;
-        let ta = typeof a;
-        let tb = typeof b;
-        if (ta !== tb) {
-          throw TypeError(
-            "builtins.add: given types mismatch (" + ta + " != " + tb + ")"
-          );
-        } else if (ta === "number") {
-          return a + b;
-        } else {
-          throw TypeError(
-            "builtins.add: invalid input type (" + ta + "), expected (number)"
-          );
-        }
-      },
-    all: (pred) => async (list) =>
-      (await Promise.all(tyforce_list(await list).map(pred))).every((x) => x),
-    any: (pred) => async (list) =>
-      (await Promise.all(tyforce_list(await list).map(pred))).some((x) => x),
-    assert: (condstr: string) => async (cond) => {
-      if (typeof cond === "function") {
-        // async functions are still functions
-        cond = cond();
-      }
-      const cond2 = await cond;
-      if (typeof cond2 !== "boolean") {
+const IndepBltis = {
+  abort: async (s) => {
+    throw new NixAbortError(tyforce_string(await s));
+  },
+  add: (a) =>
+    async function (b) {
+      a = await a;
+      b = await b;
+      let ta = typeof a;
+      let tb = typeof b;
+      if (ta !== tb) {
         throw TypeError(
-          "Assertion condition has wrong type (" + typeof cond2 + ")"
+          "builtins.add: given types mismatch (" + ta + " != " + tb + ")"
+        );
+      } else if (ta === "number") {
+        return a + b;
+      } else {
+        throw TypeError(
+          "builtins.add: invalid input type (" + ta + "), expected (number)"
         );
       }
-      assert(cond2, condstr);
     },
-    attrNames: async (aset) => Object.keys(await aset).sort(),
-    attrValues: async (aset) =>
-      Object.entries(await aset)
-        .sort()
-        .map((a) => a[1]),
-    baseNameOf: async (s) => _.last(tyforce_string(await s).split("/")),
-    bitAnd: (v1) => async (v2) =>
-      tyforce_number(await v1) & tyforce_number(await v2),
-    bitOr: (v1) => async (v2) =>
-      tyforce_number(await v1) | tyforce_number(await v2),
-    catAttrs: (s) => async (list) => {
-      const s2 = tyforce_string(await s);
-      return (await resolveList(tyforce_list(await list)))
-        .filter((aset) => Object.prototype.hasOwnProperty.call(aset, s2))
-        .map((aset) => aset[s2]);
-    },
-    ceil: async (n) => Math.ceil(tyforce_number(await n)),
-    compareVersions: (s1) => async (s2) => {
-      let s1p = splitVersion(tyforce_string(await s1));
-      let s2p = splitVersion(tyforce_string(await s2));
-      let ret = _.zip(s1p, s2p)
-        .map(([a, b]) => {
-          if (a === b) return 0;
-          const ina = a && a.match(/^[0-9]+$/g) !== null;
-          const inb = b && b.match(/^[0-9]+$/g) !== null;
-          if (ina && inb) {
-            const [pia, pib] = [parseInt(a), parseInt(b)];
-            return pia < pib ? -1 : pia == pib ? 0 : 1;
-          }
-          if ((a === "" || a === undefined) && inb) return -1;
-          if (ina && (b === "" || b === undefined)) return 1;
-          if (a === "pre" || (!ina && inb)) return -1;
-          if (b === "pre" || (ina && !inb)) return 1;
-          return a < b ? -1 : a == b ? 0 : 1;
-        })
-        .find((x) => x !== undefined && x !== 0);
-      return ret !== undefined ? ret : 0;
-    },
-    concatLists: async (lists) =>
-      await transformAsyncList(
-        lists,
-        (x) => x,
-        (x) => x.flat()
-      ),
-    concatMap: (f) => async (lists) =>
-      await transformAsyncList(
-        lists,
-        (x) => x.map(f),
-        (x) => x.flat()
-      ),
-    concatStringsSep: (sep) => async (list) =>
-      (await resolveList(tyforce_list(await list))).join(
-        tyforce_string(await sep)
-      ),
-    deepSeq: async (e1) => {
-      await deepSeq_helper(e1);
-      return (e2) => e2;
-    },
-    dirOf: async (s) => {
-      let tmp = tyforce_string(await s).split("/");
-      tmp.pop();
-      return tmp.join("/");
-    },
-    div: (a) => async (b) => {
-      const bx = tyforce_number(await b);
-      // TODO: integer division?
-      if (!bx) {
-        throw RangeError("Division by zero");
-      }
-      return tyforce_number(await a) / bx;
-    },
-    elem: (x) => async (xs) =>
-      (await Promise.all(tyforce_list(await xs))).includes(await x),
-    elemAt: (xs) => async (n) => {
-      let tmp = await tyforce_list(await xs)[tyforce_number(await n)];
-      if (tmp === undefined) {
-        throw RangeError("Index out of range");
-      }
-      return tmp;
-    },
-
-    // omitted: fetchGit, fetchTarball, fetchurl
-    filter: (f) => async (list) =>
-      await filterAsyncList(tyforce_list(await list), await f),
-    // omitted: filterSource
-    floor: async (n) => Math.floor(tyforce_number(await n)),
-    "foldl'": (op) => (nul) => async (list) =>
-      tyforce_list(await list).reduce(await op, nul),
-    fromJSON: async (e) => anti_pollution(tyforce_string(await e)),
-
-    // TODO: functionArgs -- requires nix2js/lib.rs modification
-
-    genList: (gen_) => async (len) =>
-      Array({ length: tyforce_number(await len) }, (dummy, i) => gen_(i)),
-    getEnv: async (s) =>
-      typeof process !== "undefined" && typeof process.env !== "undefined"
-        ? process.env[tyforce_string(await s)]
-        : "",
-    groupBy: (f) => async (list) =>
-      _.groupBy(tyforce_list(await list), await f),
-
-    hasAttr: (s) => async (aset) =>
-      Object.prototype.hasOwnProperty.call(await aset, tyforce_string(await s)),
-    // omitted: hashFile, hashString
-    head: async (list) => {
-      list = tyforce_list(await list);
-      if (!list.length) {
-        throw RangeError("builtins.head called on empty list");
-      }
-      return list[0];
-    },
-
-    // omitted: import
-
-    // ref: https://stackoverflow.com/a/1885569
-    intersectAttrs: (e1) => async (e2) => {
-      let e2k = Object.keys(await e2);
-      // "value => ... includes(value)" is necessary to avoid TypeErrors
-      return Object.keys(await e1)
-        .filter((value) => e2k.includes(value))
-        .filter(onlyUnique);
-    },
-
-    isAttrs: async (e) => isAttrs(await e),
-    isBool: async (e) => isBool(await e),
-    isFloat: async (e) => isNumber(await e),
-    isFunction: async (e) => (await e) instanceof Function,
-    isInt: async (e) => typeof (await e) === "bigint",
-    isList: async (e) => (await e) instanceof Array,
-
-    // DEPRECATED
-    isNull: async (e) => (await e) === null,
-
-    // TODO: isPath
-
-    isString: async (e) => isString(await e),
-
-    length: async (e) => tyforce_list(await e).length,
-    lessThan: (e1) => async (e2) =>
-      tyforce_number(await e1) < tyforce_number(await e2),
-
-    listToAttrs: async (list) =>
-      fixObjectProto(
-        Object.fromEntries(
-          await Promise.all(
-            tyforce_list(await list).map(async (ent) => {
-              ent = await ent;
-              return [ent.name, ent.value];
-            })
-          )
-        )
-      ),
-
-    map: (f) => async (list) => tyforce_list(await list).map(await f),
-    // ref: https://stackoverflow.com/a/14810722
-    mapAttrs: (f) => async (aset: MaybePromise<object>) =>
-      fixObjectProto(
-        Object.fromEntries(
-          Object.entries(await aset).map(([k, v]) => [
-            k,
-            (async (k_, v_) => await (await f(k))(v))(k, v),
-          ])
-        )
-      ),
-
-    // TODO: `match`, maybe via compiling the original `prim_match` to webassembly
-
-    mul: (a) => async (b) => tyforce_number(await a) * tyforce_number(await b),
-
-    parseDrvName: async (s) => {
-      let [name, version] = tyforce_string(await s).split("-", 2);
-      return fixObjectProto({ name, version });
-    },
-    partition: (pred) => async (list) => {
-      // no need to resolve the list, the predicate can handle that
-      let [right, wrong] = _.partition(tyforce_list(await list), await pred);
-      return fixObjectProto({ right, wrong });
-    },
-
-    // TODO: path, pathExists, placeholder
-    // omitted: readDir, readFile
-
-    removeAttrs: (aset) => async (list) => {
-      // make sure that we don't override the original object
-      let aset2 = fixObjectProto(await aset);
-      for (const key of tyforce_list(await list)) {
-        delete aset2[await key];
-      }
-      return aset2;
-    },
-
-    // ref: https://stackoverflow.com/a/67337940
-    replaceStrings: (from_) => (to) => async (s) => {
-      let from__ = await resolveList(tyforce_list(from_));
-      let to__ = await resolveList(tyforce_list(to));
-      let entries = Object.entries(_.zip(from_, to));
-      return (
-        entries
-          .reduce(
-            // Replace all the occurrences of the keys in the text into an index placholder using split-join
-            (_str, [key], i) => _str.split(key).join(`{${i}}`),
-            // Manipulate all exisitng index placeholder -like formats, in order to prevent confusion
-            (await s).replace(/\{(?=\d+\})/g, "{-")
-          )
-          // Replace all index placeholders to the desired replacement values
-          .replace(/\{(\d+)\}/g, (_, i) => entries[i][1])
-          // Undo the manipulation of index placeholder -like formats
-          .replace(/\{-(?=\d+\})/g, "{")
+  all: (pred) => async (list) =>
+    (await Promise.all(tyforce_list(await list).map(pred))).every((x) => x),
+  any: (pred) => async (list) =>
+    (await Promise.all(tyforce_list(await list).map(pred))).some((x) => x),
+  assert: (condstr: string) => async (cond) => {
+    if (typeof cond === "function") {
+      // async functions are still functions
+      cond = cond();
+    }
+    const cond2 = await cond;
+    if (typeof cond2 !== "boolean") {
+      throw TypeError(
+        "Assertion condition has wrong type (" + typeof cond2 + ")"
       );
-    },
+    }
+    assert(cond2, condstr);
+  },
+  attrNames: async (aset) => Object.keys(await aset).sort(),
+  attrValues: async (aset) =>
+    Object.entries(await aset)
+      .sort()
+      .map((a) => a[1]),
+  baseNameOf: async (s) => _.last(tyforce_string(await s).split("/")),
+  bitAnd: (v1) => async (v2) =>
+    tyforce_number(await v1) & tyforce_number(await v2),
+  bitOr: (v1) => async (v2) =>
+    tyforce_number(await v1) | tyforce_number(await v2),
+  catAttrs: (s) => async (list) => {
+    const s2 = tyforce_string(await s);
+    return (await resolveList(tyforce_list(await list)))
+      .filter((aset) => Object.prototype.hasOwnProperty.call(aset, s2))
+      .map((aset) => aset[s2]);
+  },
+  ceil: async (n) => Math.ceil(tyforce_number(await n)),
+  compareVersions: (s1) => async (s2) => {
+    let s1p = splitVersion(tyforce_string(await s1));
+    let s2p = splitVersion(tyforce_string(await s2));
+    let ret = _.zip(s1p, s2p)
+      .map(([a, b]) => {
+        if (a === b) return 0;
+        const ina = a && a.match(/^[0-9]+$/g) !== null;
+        const inb = b && b.match(/^[0-9]+$/g) !== null;
+        if (ina && inb) {
+          const [pia, pib] = [parseInt(a), parseInt(b)];
+          return pia < pib ? -1 : pia == pib ? 0 : 1;
+        }
+        if ((a === "" || a === undefined) && inb) return -1;
+        if (ina && (b === "" || b === undefined)) return 1;
+        if (a === "pre" || (!ina && inb)) return -1;
+        if (b === "pre" || (ina && !inb)) return 1;
+        return a < b ? -1 : a == b ? 0 : 1;
+      })
+      .find((x) => x !== undefined && x !== 0);
+    return ret !== undefined ? ret : 0;
+  },
+  concatLists: async (lists) =>
+    await transformAsyncList(
+      lists,
+      (x) => x,
+      (x) => x.flat()
+    ),
+  concatMap: (f) => async (lists) =>
+    await transformAsyncList(
+      lists,
+      (x) => x.map(f),
+      (x) => x.flat()
+    ),
+  concatStringsSep: (sep) => async (list) =>
+    (await resolveList(tyforce_list(await list))).join(
+      tyforce_string(await sep)
+    ),
+  deepSeq: async (e1) => {
+    await deepSeq_helper(e1);
+    return (e2) => e2;
+  },
+  dirOf: async (s) => {
+    let tmp = tyforce_string(await s).split("/");
+    tmp.pop();
+    return tmp.join("/");
+  },
+  div: (a) => async (b) => {
+    const bx = tyforce_number(await b);
+    // TODO: integer division?
+    if (!bx) {
+      throw RangeError("Division by zero");
+    }
+    return tyforce_number(await a) / bx;
+  },
+  elem: (x) => async (xs) =>
+    (await Promise.all(tyforce_list(await xs))).includes(await x),
+  elemAt: (xs) => async (n) => {
+    let tmp = await tyforce_list(await xs)[tyforce_number(await n)];
+    if (tmp === undefined) {
+      throw RangeError("Index out of range");
+    }
+    return tmp;
+  },
 
-    seq: async (e1) => {
-      await e1;
-      return (e2) => e2;
-    },
+  // omitted: fetchGit, fetchTarball, fetchurl
+  filter: (f) => async (list) =>
+    await filterAsyncList(tyforce_list(await list), await f),
+  // omitted: filterSource
+  floor: async (n) => Math.floor(tyforce_number(await n)),
+  "foldl'": (op) => (nul) => async (list) =>
+    tyforce_list(await list).reduce(await op, nul),
+  fromJSON: async (e) => anti_pollution(tyforce_string(await e)),
 
-    sort: (comp) => async (list) => sortAsyncList(list, await comp),
+  // TODO: functionArgs -- requires nix2js/lib.rs modification
 
-    // TODO: `split`, see also: `match`
+  genList: (gen_) => async (len) =>
+    Array({ length: tyforce_number(await len) }, (dummy, i) => gen_(i)),
+  getEnv: async (s) =>
+    typeof process !== "undefined" && typeof process.env !== "undefined"
+      ? process.env[tyforce_string(await s)]
+      : "",
+  groupBy: (f) => async (list) => _.groupBy(tyforce_list(await list), await f),
 
-    splitVersion: async (s) => splitVersion(tyforce_string(await s)),
+  hasAttr: (s) => async (aset) =>
+    Object.prototype.hasOwnProperty.call(await aset, tyforce_string(await s)),
+  // omitted: hashFile, hashString
+  head: async (list) => {
+    list = tyforce_list(await list);
+    if (!list.length) {
+      throw RangeError("builtins.head called on empty list");
+    }
+    return list[0];
+  },
 
-    // omitted: storePath
+  // omitted: import
 
-    stringLength: async (s) => tyforce_string(await s).length,
+  // ref: https://stackoverflow.com/a/1885569
+  intersectAttrs: (e1) => async (e2) => {
+    let e2k = Object.keys(await e2);
+    // "value => ... includes(value)" is necessary to avoid TypeErrors
+    return Object.keys(await e1)
+      .filter((value) => e2k.includes(value))
+      .filter(onlyUnique);
+  },
 
-    tail: async (list) => tyforce_list(await list).slice(1),
+  isAttrs: async (e) => isAttrs(await e),
+  isBool: async (e) => isBool(await e),
+  isFloat: async (e) => isNumber(await e),
+  isFunction: async (e) => (await e) instanceof Function,
+  isInt: async (e) => typeof (await e) === "bigint",
+  isList: async (e) => (await e) instanceof Array,
 
-    throw: async (s) => {
-      throw new NixEvalError(tyforce_string(await s));
-    },
+  // DEPRECATED
+  isNull: async (e) => (await e) === null,
 
-    // TODO: toFile, via store interaction or derivation; weird stuff
+  // TODO: isPath
 
-    // TODO: handle derivations
-    toJSON: async (x) => JSON.stringify(await x),
+  isString: async (e) => isString(await e),
 
-    // omitted: toPath; also DEPRECATED
+  length: async (e) => tyforce_list(await e).length,
+  lessThan: (e1) => async (e2) =>
+    tyforce_number(await e1) < tyforce_number(await e2),
 
-    // NOTE: we `await` in `nixToString`, because it recurses
-    toString: nixToString,
+  listToAttrs: async (list) =>
+    fixObjectProto(
+      Object.fromEntries(
+        await Promise.all(
+          tyforce_list(await list).map(async (ent) => {
+            ent = await ent;
+            return [ent.name, ent.value];
+          })
+        )
+      )
+    ),
 
-    // TODO: toXML
+  map: (f) => async (list) => tyforce_list(await list).map(await f),
+  // ref: https://stackoverflow.com/a/14810722
+  mapAttrs: (f) => async (aset: MaybePromise<object>) =>
+    fixObjectProto(
+      Object.fromEntries(
+        Object.entries(await aset).map(([k, v]) => [
+          k,
+          (async (k_, v_) => await (await f(k))(v))(k, v),
+        ])
+      )
+    ),
 
-    trace: (e1) => (e2) => {
-      console.debug(e1);
-      return e2;
-    },
+  // TODO: `match`, maybe via compiling the original `prim_match` to webassembly
 
-    tryEval: async (e) => {
-      let success = false;
-      let value = false;
-      try {
-        value = await e;
-        success = true;
-      } catch (e) {
-        if (!(typeof e === "object" && e instanceof NixEvalError)) throw e;
-        value = false;
-        success = false;
-      }
-      return fixObjectProto({ value, success });
-    },
+  mul: (a) => async (b) => tyforce_number(await a) * tyforce_number(await b),
 
-    typeOf: async (e) => {
-      e = await e;
-      if (e === null) return "null";
-      // need to differentiate this with `null` because of distinction via `isNull`,
-      // and `isNull` deprecation.
-      if (e === undefined) return "undefined";
-      if (typeof e === "object" && "valueOf" in e) e = e.valueOf();
-      let ety = typeof e;
-      if (ety === "object" && e instanceof Array) return "list";
-      return nixTypeOf.hasOwnProperty(ety) ? nixTypeOf[ety] : ety;
-    },
-  };
+  parseDrvName: async (s) => {
+    let [name, version] = tyforce_string(await s).split("-", 2);
+    return fixObjectProto({ name, version });
+  },
+  partition: (pred) => async (list) => {
+    // no need to resolve the list, the predicate can handle that
+    let [right, wrong] = _.partition(tyforce_list(await list), await pred);
+    return fixObjectProto({ right, wrong });
+  },
+
+  // TODO: path, pathExists, placeholder
+  // omitted: readDir, readFile
+
+  removeAttrs: (aset) => async (list) => {
+    // make sure that we don't override the original object
+    let aset2 = fixObjectProto(await aset);
+    for (const key of tyforce_list(await list)) {
+      delete aset2[await key];
+    }
+    return aset2;
+  },
+
+  // ref: https://stackoverflow.com/a/67337940
+  replaceStrings: (from_) => (to) => async (s) => {
+    let from__ = await resolveList(tyforce_list(from_));
+    let to__ = await resolveList(tyforce_list(to));
+    let entries = Object.entries(_.zip(from_, to));
+    return (
+      entries
+        .reduce(
+          // Replace all the occurrences of the keys in the text into an index placholder using split-join
+          (_str, [key], i) => _str.split(key).join(`{${i}}`),
+          // Manipulate all exisitng index placeholder -like formats, in order to prevent confusion
+          (await s).replace(/\{(?=\d+\})/g, "{-")
+        )
+        // Replace all index placeholders to the desired replacement values
+        .replace(/\{(\d+)\}/g, (_, i) => entries[i][1])
+        // Undo the manipulation of index placeholder -like formats
+        .replace(/\{-(?=\d+\})/g, "{")
+    );
+  },
+
+  seq: async (e1) => {
+    await e1;
+    return (e2) => e2;
+  },
+
+  sort: (comp) => async (list) => sortAsyncList(list, await comp),
+
+  // TODO: `split`, see also: `match`
+
+  splitVersion: async (s) => splitVersion(tyforce_string(await s)),
+
+  // omitted: storePath
+
+  stringLength: async (s) => tyforce_string(await s).length,
+
+  tail: async (list) => tyforce_list(await list).slice(1),
+
+  throw: async (s) => {
+    throw new NixEvalError(tyforce_string(await s));
+  },
+
+  // TODO: toFile, via store interaction or derivation; weird stuff
+
+  // TODO: handle derivations
+  toJSON: async (x) => JSON.stringify(await x),
+
+  // omitted: toPath; also DEPRECATED
+
+  // NOTE: we `await` in `nixToString`, because it recurses
+  toString: nixToString,
+
+  // TODO: toXML
+
+  trace: (e1) => (e2) => {
+    console.debug(e1);
+    return e2;
+  },
+
+  tryEval: async (e) => {
+    let success = false;
+    let value = false;
+    try {
+      value = await e;
+      success = true;
+    } catch (e) {
+      if (!(typeof e === "object" && e instanceof NixEvalError)) throw e;
+      value = false;
+      success = false;
+    }
+    return fixObjectProto({ value, success });
+  },
+
+  typeOf: async (e) => {
+    e = await e;
+    if (e === null) return "null";
+    // need to differentiate this with `null` because of distinction via `isNull`,
+    // and `isNull` deprecation.
+    if (e === undefined) return "undefined";
+    if (typeof e === "object" && "valueOf" in e) e = e.valueOf();
+    let ety = typeof e;
+    if (ety === "object" && e instanceof Array) return "list";
+    return nixTypeOf.hasOwnProperty(ety) ? nixTypeOf[ety] : ety;
+  },
+};
+
+export function initRtDep(nixRt) {
+  let tmp = Object.create(IndepBltis);
+  // all the stuff marked with 'omitted' above
+  for (const i of [
+    "fetchGit",
+    "fetchTarball",
+    "fetchurl",
+    "filterSource",
+    "hashFile",
+    "hashString",
+    "import",
+    "readDir",
+    "readFile",
+    "storePath",
+    "toPath",
+  ]) {
+    tmp[i] = nixRt[i];
+  }
+  return tmp;
 }
