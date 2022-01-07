@@ -127,7 +127,13 @@ impl Context<'_> {
                         }
                     };
                 if let Some(sctx) = sctx {
-                    self.lazyness_incoming(sctx, Tr::Need, Tr::Need, move |this, _| inner(this));
+                    self.lazyness_incoming(
+                        sctx,
+                        Tr::Flush,
+                        Tr::Flush,
+                        Ladj::Back,
+                        move |this, _| inner(this),
+                    );
                 } else {
                     inner(self);
                 }
@@ -246,16 +252,22 @@ impl Context<'_> {
                 self.push(scope);
                 self.translate_node_ident_indexing(&id);
                 self.push("=");
-                self.lazyness_incoming(value_sctx, Tr::Forward, Tr::Need, |this, _| {
-                    this.rtv(
-                        inhf_sctx,
-                        inhf.node().text_range(),
-                        inhf.inner(),
-                        "inner for inherit-from",
-                    )?;
-                    this.translate_node_ident_indexing(&id);
-                    TranslateResult::Ok(())
-                })?;
+                self.lazyness_incoming(
+                    value_sctx,
+                    Tr::Forward,
+                    Tr::Need,
+                    Ladj::Front,
+                    |this, _| {
+                        this.rtv(
+                            inhf_sctx,
+                            inhf.node().text_range(),
+                            inhf.inner(),
+                            "inner for inherit-from",
+                        )?;
+                        this.translate_node_ident_indexing(&id);
+                        TranslateResult::Ok(())
+                    },
+                )?;
                 self.push(";");
             } else {
                 let inhf_var = if let Some(x) = &use_inhtmp {
@@ -267,23 +279,35 @@ impl Context<'_> {
                     "nixInhR"
                 };
                 self.push("=");
-                self.lazyness_incoming(inhf_sctx, Tr::Need, Tr::FlushFront, |this, sctx| {
-                    this.rtv(
-                        sctx,
-                        inhf.node().text_range(),
-                        inhf.inner(),
-                        "inner for inherit-from",
-                    )
-                })?;
+                self.lazyness_incoming(
+                    inhf_sctx,
+                    Tr::Need,
+                    Tr::Flush,
+                    Ladj::Front,
+                    |this, sctx| {
+                        this.rtv(
+                            sctx,
+                            inhf.node().text_range(),
+                            inhf.inner(),
+                            "inner for inherit-from",
+                        )
+                    },
+                )?;
                 self.push(";");
                 for id in idents {
                     self.push(scope);
                     self.translate_node_ident_indexing(&id);
                     self.push("=");
-                    self.lazyness_incoming(value_sctx, Tr::Forward, Tr::Need, |this, _| {
-                        this.push(inhf_var);
-                        this.translate_node_ident_indexing(&id);
-                    });
+                    self.lazyness_incoming(
+                        value_sctx,
+                        Tr::Forward,
+                        Tr::Need,
+                        Ladj::Front,
+                        |this, _| {
+                            this.push(inhf_var);
+                            this.translate_node_ident_indexing(&id);
+                        },
+                    );
                     self.push(";");
                 }
                 if use_inhtmp.is_none() {
@@ -336,57 +360,64 @@ impl Context<'_> {
                 .inherits()
                 .all(|i| i.from().is_none() || i.idents().count() == 1)
         {
-            self.lazyness_incoming(body_sctx, Tr::Forward, Tr::Forward, |this, _| {
-                // optimization: use real object
-                this.push("Object.assign(Object.create(null),{");
-                let mut fi = true;
-                let mut handle_fi = move |this: &mut Self| {
-                    if fi {
-                        fi = false;
-                    } else {
-                        this.push(",");
+            self.lazyness_incoming(
+                body_sctx,
+                Tr::Forward,
+                Tr::Forward,
+                Ladj::Front,
+                |this, _| {
+                    // optimization: use real object
+                    this.push("Object.assign(Object.create(null),{");
+                    let mut fi = true;
+                    let mut handle_fi = move |this: &mut Self| {
+                        if fi {
+                            fi = false;
+                        } else {
+                            this.push(",");
+                        }
+                    };
+                    for i in node.entries() {
+                        handle_fi(this);
+                        this.translate_node_ident_escape_str(
+                            &Ident::cast(i.key().unwrap().path().next().unwrap()).unwrap(),
+                        );
+                        this.push(":");
+                        this.translate_node(value_sctx, i.value().unwrap())?;
                     }
-                };
-                for i in node.entries() {
-                    handle_fi(this);
-                    this.translate_node_ident_escape_str(
-                        &Ident::cast(i.key().unwrap().path().next().unwrap()).unwrap(),
-                    );
-                    this.push(":");
-                    this.translate_node(value_sctx, i.value().unwrap())?;
-                }
-                for (id, inhf) in node
-                    .inherits()
-                    .flat_map(|inh| inh.idents().map(|i| (i, inh.from())).collect::<Vec<_>>())
-                {
-                    handle_fi(this);
-                    this.translate_node_ident_escape_str(&id);
-                    this.push(":");
-                    if let Some(x) = inhf {
-                        this.lazyness_incoming(
-                            value_sctx,
-                            Tr::FlushFront,
-                            Tr::FlushFront,
-                            |this, _| {
-                                this.rtv(
-                                    mksctx!(Want, Nothing),
-                                    x.node().text_range(),
-                                    x.inner(),
-                                    "inner for inherit-from",
-                                )?;
-                                this.translate_node_ident_indexing(&id);
-                                TranslateResult::Ok(())
-                            },
-                        )?;
-                    } else {
-                        this.translate_node_ident(Some(value_sctx), &id);
+                    for (id, inhf) in node
+                        .inherits()
+                        .flat_map(|inh| inh.idents().map(|i| (i, inh.from())).collect::<Vec<_>>())
+                    {
+                        handle_fi(this);
+                        this.translate_node_ident_escape_str(&id);
+                        this.push(":");
+                        if let Some(x) = inhf {
+                            this.lazyness_incoming(
+                                value_sctx,
+                                Tr::Flush,
+                                Tr::Flush,
+                                Ladj::Front,
+                                |this, _| {
+                                    this.rtv(
+                                        mksctx!(Want, Nothing),
+                                        x.node().text_range(),
+                                        x.inner(),
+                                        "inner for inherit-from",
+                                    )?;
+                                    this.translate_node_ident_indexing(&id);
+                                    TranslateResult::Ok(())
+                                },
+                            )?;
+                        } else {
+                            this.translate_node_ident(Some(value_sctx), &id);
+                        }
                     }
-                }
-                this.push("})");
-                Ok(())
-            })
+                    this.push("})");
+                    Ok(())
+                },
+            )
         } else {
-            self.lazyness_incoming(body_sctx, Tr::Need, Tr::Forward, |this, _| {
+            self.lazyness_incoming(body_sctx, Tr::Need, Tr::Forward, Ladj::Front, |this, _| {
                 this.push(&format!("(async {}=>{{", scope));
                 for i in node.entries() {
                     this.translate_node_kv(value_sctx, i, scope)?;
@@ -437,7 +468,7 @@ impl Context<'_> {
 
         match x {
             Pt::Apply(app) => {
-                self.lazyness_incoming(sctx, Tr::Need, Tr::Need, |this, _sctx| {
+                self.lazyness_incoming(sctx, Tr::Need, Tr::Need, Ladj::Front, |this, _sctx| {
                     this.push("(");
                     this.rtv(
                         mksctx!(Want, Nothing),
@@ -458,7 +489,7 @@ impl Context<'_> {
             }
 
             Pt::Assert(art) => {
-                self.lazyness_incoming(sctx, Tr::FlushFront, Tr::Force, |this, _| {
+                self.lazyness_incoming(sctx, Tr::Flush, Tr::Force, Ladj::Front, |this, _| {
                     // NOTE: we rely on the impl.detail of lazyness_incoming
                     // here that no parens are inserted between => and { ... }
                     this.push("{await ");
@@ -530,15 +561,21 @@ impl Context<'_> {
                         self.push(")");
                     }
                     _ => {
-                        self.lazyness_incoming(sctx, Tr::Need, Tr::Flush, |this, _| {
-                            let mysctx = mksctx!(Nothing, Nothing);
-                            this.push(&format!("{}.{:?}(", NIX_OPERATORS, op));
-                            this.rtv(mysctx, txtrng, bo.lhs(), "lhs for binop")?;
-                            this.push(",");
-                            this.rtv(mysctx, txtrng, bo.rhs(), "rhs for binop")?;
-                            this.push(")");
-                            TranslateResult::Ok(())
-                        })?;
+                        self.lazyness_incoming(
+                            sctx,
+                            Tr::Need,
+                            Tr::Flush,
+                            Ladj::Front,
+                            |this, _| {
+                                let mysctx = mksctx!(Nothing, Nothing);
+                                this.push(&format!("{}.{:?}(", NIX_OPERATORS, op));
+                                this.rtv(mysctx, txtrng, bo.lhs(), "lhs for binop")?;
+                                this.push(",");
+                                this.rtv(mysctx, txtrng, bo.rhs(), "rhs for binop")?;
+                                this.push(")");
+                                TranslateResult::Ok(())
+                            },
+                        )?;
                     }
                 }
             }
@@ -555,7 +592,7 @@ impl Context<'_> {
             }
 
             Pt::IfElse(ie) => {
-                self.lazyness_incoming(sctx, Tr::Flush, Tr::Flush, |this, sctx| {
+                self.lazyness_incoming(sctx, Tr::Flush, Tr::Flush, Ladj::Front, |this, sctx| {
                     this.push("((");
                     this.rtv(
                         mksctx!(Want, Nothing),
@@ -692,7 +729,7 @@ impl Context<'_> {
             )?,
 
             Pt::List(l) => {
-                self.lazyness_incoming(sctx, Tr::Forward, Tr::FlushFront, |this, _| {
+                self.lazyness_incoming(sctx, Tr::Forward, Tr::Flush, Ladj::Front, |this, _| {
                     this.push("[");
                     let mut fi = true;
                     for i in l.items() {
@@ -709,7 +746,7 @@ impl Context<'_> {
             }
 
             Pt::OrDefault(od) => {
-                self.lazyness_incoming(sctx, Tr::Need, Tr::Need, |this, _| {
+                self.lazyness_incoming(sctx, Tr::Need, Tr::Need, Ladj::Front, |this, _| {
                     this.push(&format!("{}(", NIX_OR_DEFAULT));
                     this.rtv(
                         mksctx!(Nothing, Want),
@@ -740,7 +777,7 @@ impl Context<'_> {
             Pt::Root(r) => self.rtv(sctx, txtrng, r.inner(), "inner for root")?,
 
             Pt::Select(sel) => {
-                self.lazyness_incoming(sctx, Tr::Need, Tr::Need, |this, _| {
+                self.lazyness_incoming(sctx, Tr::Need, Tr::Need, Ladj::Front, |this, _| {
                     this.rtv(mksctx!(Want, Nothing), txtrng, sel.set(), "set for select")?;
                     if let Some(idx) = sel.index() {
                         this.translate_node_key_element_indexing(&idx)?;
@@ -758,41 +795,47 @@ impl Context<'_> {
                 match s.parts()[..] {
                     [] => self.push("\"\""),
                     [Sp::Literal(ref lit)] => self.push(&escape_str(lit)),
-                    ref sxs => self.lazyness_incoming(sctx, Tr::Forward, Tr::Need, |this, _| {
-                        this.push("(");
-                        let mut fi = true;
-                        for i in sxs.iter().filter(|i| {
-                            if let Sp::Literal(lit) = i {
-                                if lit.is_empty() {
-                                    return false;
+                    ref sxs => self.lazyness_incoming(
+                        sctx,
+                        Tr::Forward,
+                        Tr::Need,
+                        Ladj::Front,
+                        |this, _| {
+                            this.push("(");
+                            let mut fi = true;
+                            for i in sxs.iter().filter(|i| {
+                                if let Sp::Literal(lit) = i {
+                                    if lit.is_empty() {
+                                        return false;
+                                    }
                                 }
-                            }
-                            true
-                        }) {
-                            if fi {
-                                fi = false;
-                            } else {
-                                this.push("+");
-                            }
+                                true
+                            }) {
+                                if fi {
+                                    fi = false;
+                                } else {
+                                    this.push("+");
+                                }
 
-                            match i {
-                                Sp::Literal(lit) => this.push(&escape_str(lit)),
-                                Sp::Ast(ast) => {
-                                    this.push("(");
-                                    let txtrng = ast.node().text_range();
-                                    this.rtv(
-                                        mksctx!(Want, Nothing),
-                                        txtrng,
-                                        ast.inner(),
-                                        "inner for str-interpolate",
-                                    )?;
-                                    this.push(")");
+                                match i {
+                                    Sp::Literal(lit) => this.push(&escape_str(lit)),
+                                    Sp::Ast(ast) => {
+                                        this.push("(");
+                                        let txtrng = ast.node().text_range();
+                                        this.rtv(
+                                            mksctx!(Want, Nothing),
+                                            txtrng,
+                                            ast.inner(),
+                                            "inner for str-interpolate",
+                                        )?;
+                                        this.push(")");
+                                    }
                                 }
                             }
-                        }
-                        this.push(")");
-                        TranslateResult::Ok(())
-                    })?,
+                            this.push(")");
+                            TranslateResult::Ok(())
+                        },
+                    )?,
                 }
             }
 

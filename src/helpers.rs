@@ -22,9 +22,14 @@ pub enum St {
 pub enum Tr {
     Need,
     Forward,
-    FlushFront,
     Flush,
     Force,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum Ladj {
+    Front,
+    Back,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -48,7 +53,7 @@ fn merge_sttr(st: St, tr: Tr) -> (St, bool) {
     use {St::*, Tr::*};
     let tmp = match tr {
         Forward => Some(st),
-        FlushFront | Flush => match st {
+        Flush => match st {
             Did | Nothing => Some(st),
             Want => None,
         },
@@ -75,6 +80,7 @@ impl Context<'_> {
         mut sctx: StackCtx,
         await_tr: Tr,
         lazy_tr: Tr,
+        adj: Ladj,
         inner: impl FnOnce(&mut Self, StackCtx) -> R,
     ) -> R {
         let (await_st, do_await) = merge_sttr(sctx.await_st, await_tr);
@@ -87,8 +93,9 @@ impl Context<'_> {
             finisher.push(")");
         }
         // we omit the lazy part if that would result in a-l-a
-        let lta = matches!(await_tr, Tr::Forward | Tr::FlushFront);
-        if do_lazy && (!do_await || lta) {
+        let lta = matches!(await_tr, Tr::Forward)
+            || (matches!(await_tr, Tr::Flush) && matches!(adj, Ladj::Front));
+        if do_lazy && ((!do_await && !matches!(adj, Ladj::Back)) || lta) {
             self.push("nixBlti.PLazy.from(async ()=>");
             finisher.push(")");
             sctx.await_st = St::Want;
