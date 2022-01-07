@@ -16,29 +16,16 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 use rnix::{types::*, SyntaxNode as NixNode};
 
-mod consts {
-    pub const NIX_BUILTINS_RT: &str = "nixBltiRT";
-    pub const NIX_OPERATORS: &str = "nixOp";
-    pub const NIX_EXTRACT_SCOPE: &str = "nixBlti.extractScope";
-    pub const NIX_OR_DEFAULT: &str = "nixBlti.orDefault";
-    pub const NIX_RUNTIME: &str = "nixRt";
-    pub const NIX_IN_SCOPE: &str = "nixInScope";
-    pub const NIX_LAMBDA_ARG_PFX: &str = "nix__";
-    pub const NIX_LAMBDA_BOUND: &str = "nixBound";
-}
+mod consts;
 use consts::*;
-
 mod helpers;
 use helpers::*;
-
-enum ScopedVar {
-    LambdaArg,
-}
 
 struct Context<'a> {
     inp: &'a str,
     acc: &'a mut String,
-    vars: Vec<(String, ScopedVar)>,
+    vars: Vec<(String, IdentCateg)>,
+    with_stack: usize,
     names: &'a mut Vec<String>,
     mappings: &'a mut Vec<u8>,
     // tracking positions for offset calc
@@ -71,73 +58,86 @@ impl Context<'_> {
         ret
     }
 
-    fn is_ident_wellknown(&self, id: &Ident) -> bool {
-        matches!(
-            id.as_str(),
-            "abort" | "builtins" | "derivation" | "false" | "import" | "null" | "throw" | "true"
-        )
+    fn resolve_ident(&self, id: &Ident) -> Result<IdentCateg, String> {
+        let vn = id.as_str();
+        let tmp = self
+            .vars
+            .iter()
+            .rev()
+            .find(|(ref i, _)| vn == i)
+            .map(|(_, c)| *c);
+        if let Some(ret) = tmp {
+            Ok(ret)
+        } else if self.with_stack > 0 {
+            // no static analysis feasible
+            Ok(IdentCateg::WithScopeVar)
+        } else {
+            Err(format!(
+                "line {}: unknown identifier {}",
+                self.txtrng_to_lineno(id.node().text_range()),
+                vn
+            ))
+        }
     }
 
-    fn translate_node_ident(&mut self, sctx: Option<StackCtx>, id: &Ident) -> String {
-        self.snapshot_ident(id.node().text_range(), |this| {
-            let vn = id.as_str();
+    fn translate_node_ident(
+        &mut self,
+        sctx: Option<StackCtx>,
+        id: &Ident,
+    ) -> Result<String, String> {
+        let categ = self.resolve_ident(id)?;
+        let vn = id.as_str();
+        let startpos = self.acc.len();
 
-            use ScopedVar as Sv;
-            let startpos = this.acc.len();
-            // needed to skip the lazy part for attrset access...
-            let mut ret = None;
-            match vn {
-                "builtins" => this.push(NIX_BUILTINS_RT),
-                "abort" | "throw" | "derivation" => {
-                    // aliased builtins
-                    this.push(NIX_BUILTINS_RT);
-                    this.push(".");
-                    this.push(vn);
-                }
-                "import" => {
-                    this.push(NIX_RUNTIME);
-                    this.push(".");
-                    this.push(vn);
-                }
-                "false" | "true" | "null" => this.push(vn),
-                _ => {
-                    let inner =
-                        |this: &mut Self| match this.vars.iter().rev().find(|(ref i, _)| vn == i) {
-                            Some((_, Sv::LambdaArg)) => {
-                                this.push(NIX_LAMBDA_ARG_PFX);
-                                this.push(&vn.replace("-", "_$_").replace("'", "_$"));
-                            }
-                            None => {
-                                this.push(NIX_IN_SCOPE);
-                                this.push(&if attrelem_raw_safe(vn) {
-                                    format!(".{}", vn)
-                                } else {
-                                    format!("[{}]", escape_str(vn))
-                                });
-                            }
-                        };
-                    if let Some(sctx) = sctx {
-                        this.lazyness_incoming(
-                            sctx,
-                            Tr::Flush,
-                            Tr::Flush,
-                            Ladj::Back,
-                            |this, _| {
-                                let startpos = this.acc.len();
-                                inner(this);
-                                ret = Some(this.acc[startpos..].to_string());
-                            },
-                        );
-                    } else {
-                        inner(this);
-                    }
-                }
-            }
-            if let Some(x) = ret {
-                x
+        // needed to skip the lazy part for attrset access...
+        let mut ret = None;
+        let mut handle_lazyness = |this: &mut Self, inner: &mut dyn FnMut(&mut Self)| {
+            if let Some(sctx) = sctx {
+                this.lazyness_incoming(sctx, Tr::Flush, Tr::Flush, Ladj::Back, |this, _| {
+                    let startpos = this.acc.len();
+                    inner(this);
+                    ret = Some(this.acc[startpos..].to_string());
+                });
             } else {
-                this.acc[startpos..].to_string()
+                inner(this);
             }
+        };
+
+        match categ {
+            IdentCateg::Literal(lit) => {
+                self.snapshot_ident(id.node().text_range(), |this| this.push(lit))
+            }
+            IdentCateg::AlBuiltin("builtins") => {
+                self.snapshot_ident(id.node().text_range(), |this| {
+                    this.push(NIX_BUILTINS_RT);
+                })
+            }
+            IdentCateg::AlBuiltin(ablti) => self.snapshot_ident(id.node().text_range(), |this| {
+                this.push(NIX_BUILTINS_RT);
+                this.push(".");
+                this.push(ablti.strip_prefix("__").unwrap_or(ablti));
+            }),
+            IdentCateg::LambdaArg => handle_lazyness(self, &mut |this: &mut Self| {
+                this.snapshot_ident(id.node().text_range(), |this| {
+                    this.push(NIX_LAMBDA_ARG_PFX);
+                    this.push(&vn.replace("-", "_$_").replace("'", "_$"));
+                })
+            }),
+            _ => handle_lazyness(self, &mut |this: &mut Self| {
+                this.snapshot_ident(id.node().text_range(), |this| {
+                    this.push(NIX_IN_SCOPE);
+                    this.push(&if attrelem_raw_safe(vn) {
+                        format!(".{}", vn)
+                    } else {
+                        format!("[{}]", escape_str(vn))
+                    });
+                })
+            }),
+        }
+        Ok(if let Some(x) = ret {
+            x
+        } else {
+            self.acc[startpos..].to_string()
         })
     }
 
@@ -314,7 +314,7 @@ impl Context<'_> {
                 self.push(scope);
                 self.translate_node_ident_indexing(&id);
                 self.push("=");
-                self.translate_node_ident(Some(value_sctx), &id);
+                self.translate_node_ident(Some(value_sctx), &id)?;
                 self.push(";");
             }
         }
@@ -403,7 +403,7 @@ impl Context<'_> {
                                 },
                             )?;
                         } else {
-                            this.translate_node_ident(Some(value_sctx), &id);
+                            this.translate_node_ident(Some(value_sctx), &id)?;
                         }
                     }
                     this.push("})");
@@ -413,6 +413,24 @@ impl Context<'_> {
         } else {
             self.lazyness_incoming(body_sctx, Tr::Need, Tr::Forward, Ladj::Front, |this, _| {
                 this.push(&format!("(async {}=>{{", scope));
+                let orig_vstkl = this.vars.len();
+                if scope == NIX_IN_SCOPE {
+                    for i in node
+                        .entries()
+                        .flat_map(|i| i.key().and_then(|j| j.path().next()))
+                        .chain(
+                            node.inherits()
+                                .flat_map(|i| i.idents())
+                                .map(|i| i.node().clone()),
+                        )
+                    {
+                        if let Some(x) = Ident::cast(i) {
+                            // register variable names
+                            this.vars
+                                .push((x.as_str().to_string(), IdentCateg::LetInScopeVar));
+                        }
+                    }
+                }
                 for i in node.entries() {
                     this.translate_node_kv(value_sctx, i, scope)?;
                 }
@@ -435,6 +453,8 @@ impl Context<'_> {
                 if scope == NIX_IN_SCOPE {
                     this.push(NIX_IN_SCOPE);
                 }
+                assert!(this.vars.len() >= orig_vstkl);
+                this.vars.truncate(orig_vstkl);
                 this.push("))");
                 Ok(())
             })
@@ -583,7 +603,7 @@ impl Context<'_> {
             Pt::Error(_) => unreachable!(),
 
             Pt::Ident(id) => {
-                self.translate_node_ident(Some(sctx), &id);
+                self.translate_node_ident(Some(sctx), &id)?;
             }
 
             Pt::IfElse(ie) => {
@@ -625,8 +645,8 @@ impl Context<'_> {
                 self.push("(async ");
                 if let Some(y) = Ident::cast(argx.clone()) {
                     let yas = y.as_str();
-                    self.vars.push((yas.to_string(), ScopedVar::LambdaArg));
-                    self.translate_node_ident(None, &y);
+                    self.vars.push((yas.to_string(), IdentCateg::LambdaArg));
+                    self.translate_node_ident(None, &y)?;
                     self.push("=>(");
                     self.rtv(BODY_SCTX, txtrng, lam.body(), "body for lambda")?;
                     assert!(self.vars.len() >= cur_lamstk);
@@ -635,35 +655,41 @@ impl Context<'_> {
                 } else if let Some(y) = Pattern::cast(argx) {
                     let argname = if let Some(z) = y.at() {
                         self.vars
-                            .push((z.as_str().to_string(), ScopedVar::LambdaArg));
-                        self.translate_node_ident(None, &z)
+                            .push((z.as_str().to_string(), IdentCateg::LambdaArg));
+                        self.translate_node_ident(None, &z)?
                     } else {
                         self.push(NIX_LAMBDA_BOUND);
                         NIX_LAMBDA_BOUND.to_string()
                     };
+                    // register var names
+                    let mut entries = Vec::new();
+                    for i in y.entries() {
+                        if let Some(z) = i.name() {
+                            self.vars
+                                .push((z.as_str().to_string(), IdentCateg::LambdaArg));
+                            entries.push((z, i.default()));
+                        } else {
+                            return Err(format!("lambda pattern ({:?}) has entry without name", y));
+                        }
+                    }
+                    let entries = entries;
                     self.push("=>{");
                     self.push(&argname);
                     self.push("=await ");
                     self.push(&argname);
                     self.push(";");
-                    for i in y.entries() {
-                        if let Some(z) = i.name() {
-                            self.push("let ");
-                            self.vars
-                                .push((z.as_str().to_string(), ScopedVar::LambdaArg));
-                            self.translate_node_ident(None, &z);
-                            // NOTE: it should be unnecessary to insert `await` here,
-                            // instead, it is inserted at the usage sites.
-                            self.push(&format!("={}._lambdaA2chk({},", NIX_OPERATORS, argname));
-                            self.translate_node_ident_escape_str(&z);
-                            if let Some(zdfl) = i.default() {
-                                self.push(",");
-                                self.translate_node(mksctx!(Nothing, Want), zdfl)?;
-                            }
-                            self.push(");");
-                        } else {
-                            return Err(format!("lambda pattern ({:?}) has entry without name", y));
+                    for (z, dfl) in entries {
+                        self.push("let ");
+                        self.translate_node_ident(None, &z)?;
+                        // NOTE: it should be unnecessary to insert `await` here,
+                        // instead, it is inserted at the usage sites.
+                        self.push(&format!("={}._lambdaA2chk({},", NIX_OPERATORS, argname));
+                        self.translate_node_ident_escape_str(&z);
+                        if let Some(zdfl) = dfl {
+                            self.push(",");
+                            self.translate_node(mksctx!(Nothing, Want), zdfl)?;
                         }
+                        self.push(");");
                     }
                     // FIXME: handle missing ellipsis
 
@@ -780,7 +806,13 @@ impl Context<'_> {
 
                 let (slt, is_wellknown) = if let Some(slt) = sel.set() {
                     if let Some(id) = Ident::cast(slt.clone()) {
-                        (slt, self.is_ident_wellknown(&id))
+                        (
+                            slt,
+                            matches!(
+                                self.resolve_ident(&id),
+                                Ok(IdentCateg::Literal(_) | IdentCateg::AlBuiltin(_))
+                            ),
+                        )
                     } else {
                         (slt, false)
                     }
@@ -906,12 +938,14 @@ impl Context<'_> {
 
             Pt::With(with) => {
                 self.push(&format!("(async {}=>(", NIX_IN_SCOPE));
+                self.with_stack += 1;
                 self.rtv(
                     mksctx!(Want, Nothing),
                     txtrng,
                     with.body(),
                     "body for 'with' scope",
                 )?;
+                self.with_stack -= 1;
                 self.push(&format!("))(nixBlti.mkScopeWith({},", NIX_IN_SCOPE));
                 self.rtv(
                     mksctx!(Want, Nothing),
@@ -954,7 +988,11 @@ pub fn translate(s: &str, inp_name: &str) -> Result<(String, String), Vec<String
         line_cache: linetrack::LineCache::new(s),
         inp: s,
         acc: &mut ret,
-        vars: Default::default(),
+        vars: DFL_VARS
+            .iter()
+            .map(|(name, val)| (name.to_string(), *val))
+            .collect(),
+        with_stack: 0,
         names: &mut names,
         mappings: &mut mappings,
         lp_src: Default::default(),
