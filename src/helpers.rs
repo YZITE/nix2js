@@ -68,8 +68,8 @@ impl Context<'_> {
             DidAwait
         };
         if sctx.insert_lazy {
-            self.push("(async ()=>");
-            finisher.push(")()");
+            self.push("nixBlti.PLazy.from(async ()=>");
+            finisher.push(")");
             sctx.lazyness_st = WantAwait;
             sctx.insert_lazy = false;
         }

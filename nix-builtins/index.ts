@@ -2,6 +2,7 @@
 
 import * as _ from 'lodash-es';
 import assert from 'webassert';
+export { default as PLazy } from 'p-lazy';
 
 export const API_VERSION = 0;
 
