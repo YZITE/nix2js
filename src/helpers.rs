@@ -22,6 +22,7 @@ pub enum St {
 pub enum Tr {
     Need,
     Forward,
+    Flush,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -45,6 +46,10 @@ fn merge_sttr(st: St, tr: Tr) -> (St, bool) {
     use {St::*, Tr::*};
     let tmp = match tr {
         Forward => Some(st),
+        Flush => match st {
+            Did | Nothing => Some(st),
+            Want => None,
+        },
         Need => match st {
             Did => Some(Did),
             Want => None,

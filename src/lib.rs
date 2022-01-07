@@ -524,7 +524,7 @@ impl Context<'_> {
             }
 
             Pt::IfElse(ie) => {
-                self.lazyness_incoming(sctx, Tr::Forward, Tr::Need, |this, sctx| {
+                self.lazyness_incoming(sctx, Tr::Flush, Tr::Flush, |this, sctx| {
                     this.push("((");
                     this.rtv(
                         mksctx!(Want, Nothing),
