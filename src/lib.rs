@@ -14,7 +14,6 @@
  be the objects/namespace of all exported objects of the npm package `nix-builtins`.
 **/
 // SPDX-License-Identifier: LGPL-2.1-or-later
-
 use rnix::{types::*, SyntaxNode as NixNode};
 
 mod postracker;
@@ -307,7 +306,7 @@ impl Context<'_> {
     fn translate_let<EH: EntryHolder>(
         &mut self,
         body_sctx: StackCtx,
-        value_sctx: StackCtx,
+        values_lazy: bool,
         node: &EH,
         body: LetBody,
         scope: &str,
@@ -320,7 +319,11 @@ impl Context<'_> {
             }
             return Ok(());
         }
-        // TODO: is Forward correct here?
+        let value_sctx = if values_lazy {
+            mksctx!(Nothing, Want)
+        } else {
+            mksctx!(Nothing, Nothing)
+        };
         if scope != NIX_IN_SCOPE
             && matches!(body, LetBody::ExtractScope)
             && node.entries().all(|i| {
@@ -331,7 +334,7 @@ impl Context<'_> {
             })
             && node.inherits().next().is_none()
         {
-            self.lazyness_incoming(body_sctx, Tr::Forward, Tr::Need, |this, _| {
+            self.lazyness_incoming(body_sctx, Tr::Forward, Tr::Forward, |this, _| {
                 // optimization: use real object
                 this.push("Object.assign(Object.create(null),{");
                 let inner = |this: &mut Self, i: KeyValue| {
@@ -339,7 +342,7 @@ impl Context<'_> {
                         &Ident::cast(i.key().unwrap().path().next().unwrap()).unwrap(),
                     );
                     this.push(":");
-                    this.translate_node(mksctx!(Nothing, Nothing), i.value().unwrap())?;
+                    this.translate_node(value_sctx, i.value().unwrap())?;
                     TranslateResult::Ok(())
                 };
                 let mut it = node.entries();
@@ -352,7 +355,7 @@ impl Context<'_> {
                 Ok(())
             })
         } else {
-            self.lazyness_incoming(body_sctx, Tr::Need, Tr::Need, |this, _| {
+            self.lazyness_incoming(body_sctx, Tr::Need, Tr::Forward, |this, _| {
                 this.push(&format!("(async {}=>{{", scope));
                 for i in node.entries() {
                     this.translate_node_kv(value_sctx, i, scope)?;
@@ -403,23 +406,25 @@ impl Context<'_> {
 
         match x {
             Pt::Apply(app) => {
-                self.lazyness_incoming(sctx, Tr::Need, Tr::Need, |this, _| {
-                    this.push("(");
-                    this.rtv(
-                        mksctx!(Want, Nothing),
-                        txtrng,
-                        app.lambda(),
-                        "lambda for application",
-                    )?;
-                    this.push(")(");
-                    this.rtv(
-                        mksctx!(Nothing, Nothing),
-                        txtrng,
-                        app.value(),
-                        "value for application",
-                    )?;
-                    this.push(")");
-                    TranslateResult::Ok(())
+                self.lazyness_incoming(sctx, Tr::Need, Tr::Need, |this, sctx| {
+                    this.lazyness_incoming(sctx, Tr::Need, Tr::Forward, |this, _| {
+                        this.push("(");
+                        this.rtv(
+                            mksctx!(Want, Nothing),
+                            txtrng,
+                            app.lambda(),
+                            "lambda for application",
+                        )?;
+                        this.push(")(");
+                        this.rtv(
+                            mksctx!(Nothing, Nothing),
+                            txtrng,
+                            app.value(),
+                            "value for application",
+                        )?;
+                        this.push(")");
+                        TranslateResult::Ok(())
+                    })
                 })?;
             }
 
@@ -461,17 +466,7 @@ impl Context<'_> {
                 } else {
                     "nixAttrsScope"
                 };
-                self.translate_let(
-                    sctx,
-                    if ars.recursive() {
-                        mksctx!(Nothing, Want)
-                    } else {
-                        mksctx!(Nothing, Nothing)
-                    },
-                    &ars,
-                    LetBody::ExtractScope,
-                    scope,
-                )?;
+                self.translate_let(sctx, ars.recursive(), &ars, LetBody::ExtractScope, scope)?;
             }
 
             Pt::BinOp(bo) => {
@@ -487,12 +482,7 @@ impl Context<'_> {
                 match op {
                     Bok::IsSet => {
                         self.push("Object.prototype.hasOwnProperty.call(");
-                        self.rtv(
-                            mksctx!(Want, Nothing),
-                            txtrng,
-                            bo.lhs(),
-                            "lhs for binop ?",
-                        )?;
+                        self.rtv(mksctx!(Want, Nothing), txtrng, bo.lhs(), "lhs for binop ?")?;
                         self.push(",");
                         if let Some(x) = bo.rhs() {
                             if let Some(y) = Ident::cast(x.clone()) {
@@ -625,7 +615,7 @@ impl Context<'_> {
 
             Pt::LegacyLet(l) => self.translate_let(
                 sctx,
-                mksctx!(Nothing, Want),
+                true,
                 &l,
                 LetBody::Nix(
                     l.entries()
@@ -657,7 +647,7 @@ impl Context<'_> {
 
             Pt::LetIn(l) => self.translate_let(
                 sctx,
-                mksctx!(Nothing, Want),
+                true,
                 &l,
                 LetBody::Nix(l.body().ok_or_else(|| {
                     format!(
@@ -715,12 +705,7 @@ impl Context<'_> {
 
             Pt::Select(sel) => {
                 self.lazyness_incoming(sctx, Tr::Need, Tr::Need, |this, _| {
-                    this.rtv(
-                        mksctx!(Want, Nothing),
-                        txtrng,
-                        sel.set(),
-                        "set for select",
-                    )?;
+                    this.rtv(mksctx!(Want, Nothing), txtrng, sel.set(), "set for select")?;
                     if let Some(idx) = sel.index() {
                         this.translate_node_key_element_indexing(&idx)?;
                     } else {
@@ -732,47 +717,47 @@ impl Context<'_> {
 
             Pt::Str(s) => {
                 use rnix::value::StrPart as Sp;
-                self.lazyness_incoming(sctx, Tr::Forward, Tr::Need, |this, _| {
-                    match s.parts()[..] {
-                        [] => this.push("\"\""),
-                        [Sp::Literal(ref lit)] => this.push(&escape_str(lit)),
-                        ref sxs => {
-                            this.push("(");
-                            let mut fi = true;
-                            for i in sxs.iter().filter(|i| {
-                                if let Sp::Literal(lit) = i {
-                                    if lit.is_empty() {
-                                        return false;
-                                    }
-                                }
-                                true
-                            }) {
-                                if fi {
-                                    fi = false;
-                                } else {
-                                    this.push("+");
-                                }
-
-                                match i {
-                                    Sp::Literal(lit) => this.push(&escape_str(lit)),
-                                    Sp::Ast(ast) => {
-                                        this.push("(");
-                                        let txtrng = ast.node().text_range();
-                                        this.rtv(
-                                            mksctx!(Want, Nothing),
-                                            txtrng,
-                                            ast.inner(),
-                                            "inner for str-interpolate",
-                                        )?;
-                                        this.push(")");
-                                    }
+                // NOTE: we do not need to honor lazyness if we just put a
+                // literal string here
+                match s.parts()[..] {
+                    [] => self.push("\"\""),
+                    [Sp::Literal(ref lit)] => self.push(&escape_str(lit)),
+                    ref sxs => self.lazyness_incoming(sctx, Tr::Forward, Tr::Need, |this, _| {
+                        this.push("(");
+                        let mut fi = true;
+                        for i in sxs.iter().filter(|i| {
+                            if let Sp::Literal(lit) = i {
+                                if lit.is_empty() {
+                                    return false;
                                 }
                             }
-                            this.push(")");
+                            true
+                        }) {
+                            if fi {
+                                fi = false;
+                            } else {
+                                this.push("+");
+                            }
+
+                            match i {
+                                Sp::Literal(lit) => this.push(&escape_str(lit)),
+                                Sp::Ast(ast) => {
+                                    this.push("(");
+                                    let txtrng = ast.node().text_range();
+                                    this.rtv(
+                                        mksctx!(Want, Nothing),
+                                        txtrng,
+                                        ast.inner(),
+                                        "inner for str-interpolate",
+                                    )?;
+                                    this.push(")");
+                                }
+                            }
                         }
-                    }
-                    TranslateResult::Ok(())
-                })?;
+                        this.push(")");
+                        TranslateResult::Ok(())
+                    })?,
+                }
             }
 
             Pt::StrInterpol(si) => self.rtv(

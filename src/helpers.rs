@@ -11,20 +11,20 @@ pub fn escape_str(s: &str) -> String {
     serde_json::value::Value::String(s.to_string()).to_string()
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum St {
     Did,
     Want,
     Nothing,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum Tr {
     Need,
     Forward,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct StackCtx {
     pub await_st: St,
     pub lazy_st: St,
@@ -51,7 +51,7 @@ fn merge_sttr(st: St, tr: Tr) -> (St, bool) {
             Nothing => Some(Want),
         },
     };
-    (tmp.unwrap_or(Did), tmp.is_some())
+    (tmp.unwrap_or(Did), tmp.is_none())
 }
 
 impl Context<'_> {
