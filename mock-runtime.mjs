@@ -34,7 +34,7 @@ let nix_path_parsed = (() => {
         }
     }
     return parsed;
-});
+})();
 
 async function importTail(real_path) {
     const tstart = process.hrtime();
@@ -107,7 +107,7 @@ function buildRT(opath) {
                         return new nixBlti.NixEvalError(opath + ": export not supported: " + anchor + "|" + xpath);
                     }
                     let parts = xpath.split(path.sep);
-                    if (nix_path_parsed.lookup[parts[0]] !== undefined) {
+                    if (nix_path_parsed.lookup.hasOwnProperty(parts[0])) {
                         return path.resolve(nix_path_parsed.lookup[parts[0]], ... parts.slice(1));
                     }
                     return (async () => {
