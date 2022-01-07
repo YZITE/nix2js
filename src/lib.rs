@@ -332,7 +332,9 @@ impl Context<'_> {
                         j.path().count() == 1 && Ident::cast(j.path().next().unwrap()).is_some()
                     }) == Some(true)
             })
-            && node.inherits().all(|i| i.from().is_none())
+            && node
+                .inherits()
+                .all(|i| i.from().is_none() || i.idents().count() == 1)
         {
             self.lazyness_incoming(body_sctx, Tr::Forward, Tr::Forward, |this, _| {
                 // optimization: use real object
@@ -353,11 +355,32 @@ impl Context<'_> {
                     this.push(":");
                     this.translate_node(value_sctx, i.value().unwrap())?;
                 }
-                for i in node.inherits().flat_map(|inh| inh.idents()) {
+                for (id, inhf) in node
+                    .inherits()
+                    .flat_map(|inh| inh.idents().map(|i| (i, inh.from())).collect::<Vec<_>>())
+                {
                     handle_fi(this);
-                    this.translate_node_ident_escape_str(&i);
+                    this.translate_node_ident_escape_str(&id);
                     this.push(":");
-                    this.translate_node_ident(Some(value_sctx), &i);
+                    if let Some(x) = inhf {
+                        this.lazyness_incoming(
+                            value_sctx,
+                            Tr::FlushFront,
+                            Tr::FlushFront,
+                            |this, _| {
+                                this.rtv(
+                                    mksctx!(Want, Nothing),
+                                    x.node().text_range(),
+                                    x.inner(),
+                                    "inner for inherit-from",
+                                )?;
+                                this.translate_node_ident_indexing(&id);
+                                TranslateResult::Ok(())
+                            },
+                        )?;
+                    } else {
+                        this.translate_node_ident(Some(value_sctx), &id);
+                    }
                 }
                 this.push("})");
                 Ok(())
