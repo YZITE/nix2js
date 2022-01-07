@@ -114,13 +114,13 @@ impl Context<'_> {
         ret
     }
 
-    pub(crate) fn snapshot_pos(&mut self, inpos: rnix::TextSize, is_ident: bool) -> Option<()> {
-        let (mut lp_src, mut lp_dst) = (self.lp_src, self.lp_dst);
-        let (ident, src_oline, src_ocol) =
-            lp_src.update(self.inp.as_bytes(), usize::from(inpos))?;
+    pub(crate) fn snapshot_pos(&mut self, inpos: rnix::TextSize) -> Option<()> {
+        let mut lp_dst = self.lp_dst;
+        // use the line cache here because it can deal with backwards jumps
+        let (src_line, src_col) = self.line_cache.run(usize::from(inpos));
+        let src_oline = i64::try_from(src_line).unwrap() - i64::try_from(self.lp_src.0).unwrap();
+        let src_ocol = i64::try_from(src_col).unwrap() - i64::try_from(self.lp_src.1).unwrap();
         let (_, dst_oline, dst_ocol) = lp_dst.update(self.acc.as_bytes(), self.acc.len())?;
-        let (src_oline, src_ocol): (u32, u32) =
-            (src_oline.try_into().unwrap(), src_ocol.try_into().unwrap());
         let (dst_oline, dst_ocol): (u32, u32) =
             (dst_oline.try_into().unwrap(), dst_ocol.try_into().unwrap());
 
@@ -139,27 +139,43 @@ impl Context<'_> {
 
         if !(src_oline == 0 && src_ocol == 0) {
             vlqe(0, self.mappings).unwrap();
-            vlqe(src_oline.into(), &mut self.mappings).unwrap();
-            vlqe(src_ocol.into(), &mut self.mappings).unwrap();
-            if is_ident {
-                if let Ok(ident) = std::str::from_utf8(ident) {
-                    // reuse ident if already present
-                    let idx = match self.names.iter().enumerate().find(|(_, i)| **i == ident) {
-                        Some((idx, _)) => idx,
-                        None => {
-                            let idx = self.names.len();
-                            self.names.push(ident.to_string());
-                            idx
-                        }
-                    };
-                    vlqe(idx.try_into().unwrap(), &mut self.mappings).unwrap();
-                }
-            }
+            vlqe(src_oline, &mut self.mappings).unwrap();
+            vlqe(src_ocol, &mut self.mappings).unwrap();
         }
 
-        self.lp_src = lp_src;
+        self.lp_src = (src_line, src_col);
         self.lp_dst = lp_dst;
         Some(())
+    }
+
+    pub(crate) fn snapshot_ident<R>(
+        &mut self,
+        inrng: rnix::TextRange,
+        consume: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let mut is_ident = self.snapshot_pos(inrng.start()).is_some();
+
+        let ret = consume(self);
+
+        is_ident &= self.snapshot_pos(inrng.end()).is_some();
+
+        // if we don't make this conditional, we might end up with scrambled
+        // references in the source-map output
+        if is_ident {
+            // reuse ident if already present
+            let ident = &self.inp[inrng];
+            let idx = match self.names.iter().enumerate().find(|(_, i)| **i == ident) {
+                Some((idx, _)) => idx,
+                None => {
+                    let idx = self.names.len();
+                    self.names.push(ident.to_string());
+                    idx
+                }
+            };
+            vlq::encode(idx.try_into().unwrap(), &mut self.mappings).unwrap();
+        }
+
+        ret
     }
 
     pub(crate) fn txtrng_to_lineno(&self, txtrng: rnix::TextRange) -> usize {

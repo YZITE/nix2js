@@ -16,9 +16,6 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 use rnix::{types::*, SyntaxNode as NixNode};
 
-mod postracker;
-use postracker::PosTracker;
-
 mod consts {
     pub const NIX_BUILTINS_RT: &str = "nixBltiRT";
     pub const NIX_OPERATORS: &str = "nixOp";
@@ -45,8 +42,9 @@ struct Context<'a> {
     names: &'a mut Vec<String>,
     mappings: &'a mut Vec<u8>,
     // tracking positions for offset calc
-    lp_src: PosTracker,
-    lp_dst: PosTracker,
+    line_cache: linetrack::LineCache,
+    lp_src: (usize, usize),
+    lp_dst: linetrack::PosTrackerExtern,
 }
 
 enum LetBody {
@@ -58,28 +56,18 @@ type TranslateResult = Result<(), String>;
 
 impl Context<'_> {
     fn translate_node_ident_escape_str(&mut self, id: &Ident) -> String {
-        let txtrng = id.node().text_range();
-        // if we don't make this conditional, we would record
-        // scrambled identifiers otherwise...
-        let is_ident = self.snapshot_pos(txtrng.start(), false).is_some();
         let ret = escape_str(id.as_str());
-        self.push(&ret);
-        self.snapshot_pos(txtrng.end(), is_ident);
+        self.snapshot_ident(id.node().text_range(), |this| this.push(&ret));
         ret
     }
 
     fn translate_node_ident_indexing(&mut self, id: &Ident) -> String {
-        let txtrng = id.node().text_range();
-        // if we don't make this conditional, we would record
-        // scrambled identifiers otherwise...
-        let is_ident = self.snapshot_pos(txtrng.start(), false).is_some();
         let ret = if attrelem_raw_safe(id.as_str()) {
             format!(".{}", id.as_str())
         } else {
             format!("[{}]", escape_str(id.as_str()))
         };
-        self.push(&ret);
-        self.snapshot_pos(txtrng.end(), is_ident);
+        self.snapshot_ident(id.node().text_range(), |this| this.push(&ret));
         ret
     }
 
@@ -91,67 +79,66 @@ impl Context<'_> {
     }
 
     fn translate_node_ident(&mut self, sctx: Option<StackCtx>, id: &Ident) -> String {
-        let txtrng = id.node().text_range();
-        // if we don't make this conditional, we would record
-        // scrambled identifiers otherwise...
-        let is_ident = self.snapshot_pos(txtrng.start(), false).is_some();
-        let vn = id.as_str();
+        self.snapshot_ident(id.node().text_range(), |this| {
+            let vn = id.as_str();
 
-        use ScopedVar as Sv;
-        let startpos = self.acc.len();
-        // needed to skip the lazy part for attrset access...
-        let mut ret = None;
-        match vn {
-            "builtins" => self.push(NIX_BUILTINS_RT),
-            "abort" | "throw" | "derivation" => {
-                // aliased builtins
-                self.push(NIX_BUILTINS_RT);
-                self.push(".");
-                self.push(vn);
-            }
-            "import" => {
-                self.push(NIX_RUNTIME);
-                self.push(".");
-                self.push(vn);
-            }
-            "false" | "true" | "null" => self.push(vn),
-            _ => {
-                let mut inner =
-                    |this: &mut Self| match this.vars.iter().rev().find(|(ref i, _)| vn == i) {
-                        Some((_, Sv::LambdaArg)) => {
-                            this.push(NIX_LAMBDA_ARG_PFX);
-                            this.push(&vn.replace("-", "___"));
-                        }
-                        None => {
-                            let startpos = this.acc.len();
-                            this.push(NIX_IN_SCOPE);
-                            this.push(&if attrelem_raw_safe(vn) {
-                                format!(".{}", vn)
-                            } else {
-                                format!("[{}]", escape_str(vn))
-                            });
-                            ret = Some(this.acc[startpos..].to_string());
-                        }
-                    };
-                if let Some(sctx) = sctx {
-                    self.lazyness_incoming(
-                        sctx,
-                        Tr::Flush,
-                        Tr::Flush,
-                        Ladj::Back,
-                        move |this, _| inner(this),
-                    );
-                } else {
-                    inner(self);
+            use ScopedVar as Sv;
+            let startpos = this.acc.len();
+            // needed to skip the lazy part for attrset access...
+            let mut ret = None;
+            match vn {
+                "builtins" => this.push(NIX_BUILTINS_RT),
+                "abort" | "throw" | "derivation" => {
+                    // aliased builtins
+                    this.push(NIX_BUILTINS_RT);
+                    this.push(".");
+                    this.push(vn);
+                }
+                "import" => {
+                    this.push(NIX_RUNTIME);
+                    this.push(".");
+                    this.push(vn);
+                }
+                "false" | "true" | "null" => this.push(vn),
+                _ => {
+                    let inner =
+                        |this: &mut Self| match this.vars.iter().rev().find(|(ref i, _)| vn == i) {
+                            Some((_, Sv::LambdaArg)) => {
+                                this.push(NIX_LAMBDA_ARG_PFX);
+                                this.push(&vn.replace("-", "___"));
+                            }
+                            None => {
+                                this.push(NIX_IN_SCOPE);
+                                this.push(&if attrelem_raw_safe(vn) {
+                                    format!(".{}", vn)
+                                } else {
+                                    format!("[{}]", escape_str(vn))
+                                });
+                            }
+                        };
+                    if let Some(sctx) = sctx {
+                        this.lazyness_incoming(
+                            sctx,
+                            Tr::Flush,
+                            Tr::Flush,
+                            Ladj::Back,
+                            |this, _| {
+                                let startpos = this.acc.len();
+                                inner(this);
+                                ret = Some(this.acc[startpos..].to_string());
+                            },
+                        );
+                    } else {
+                        inner(this);
+                    }
                 }
             }
-        }
-        self.snapshot_pos(txtrng.end(), is_ident);
-        if let Some(x) = ret {
-            x
-        } else {
-            self.acc[startpos..].to_string()
-        }
+            if let Some(x) = ret {
+                x
+            } else {
+                this.acc[startpos..].to_string()
+            }
+        })
     }
 
     fn translate_node_key_element_force_str(&mut self, node: &NixNode) -> TranslateResult {
@@ -460,6 +447,7 @@ impl Context<'_> {
         }
 
         let txtrng = node.text_range();
+        self.snapshot_pos(txtrng.start());
         let x = match ParsedType::try_from(node) {
             Err(e) => {
                 return Err(format!(
@@ -963,6 +951,7 @@ pub fn translate(s: &str, inp_name: &str) -> Result<(String, String), Vec<String
     ret += NIX_IN_SCOPE;
     ret += "=nixBlti.mkScopeWith();return ";
     match (Context {
+        line_cache: linetrack::LineCache::new(s),
         inp: s,
         acc: &mut ret,
         vars: Default::default(),

@@ -8,6 +8,7 @@ edition = "2021"
 license = "LGPL-2.1+"
 
 [dependencies]
+linetrack = "0.1"
 rnix = { git = "https://github.com/zseri/rnix-parser", branch = "fix-string-interpol" }
 vlq = "0.5"
 
