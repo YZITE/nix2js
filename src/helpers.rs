@@ -11,18 +11,20 @@ pub fn escape_str(s: &str) -> String {
     serde_json::value::Value::String(s.to_string()).to_string()
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug)]
 pub enum St {
     Did,
     Want,
     Nothing,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug)]
 pub enum Tr {
     Need,
     Forward,
+    FlushFront,
     Flush,
+    Force,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -46,9 +48,13 @@ fn merge_sttr(st: St, tr: Tr) -> (St, bool) {
     use {St::*, Tr::*};
     let tmp = match tr {
         Forward => Some(st),
-        Flush => match st {
+        FlushFront | Flush => match st {
             Did | Nothing => Some(st),
             Want => None,
+        },
+        Force => match st {
+            Did => Some(Did),
+            Want | Nothing => None,
         },
         Need => match st {
             Did => Some(Did),
@@ -86,7 +92,7 @@ impl Context<'_> {
             sctx.await_st = St::Want;
             sctx.lazy_st = St::Nothing;
 
-            if await_tr != Tr::Forward {
+            if !matches!(await_tr, Tr::Forward | Tr::FlushFront) {
                 self.push("(await ");
                 finisher.push(")");
                 sctx.await_st = St::Did;

@@ -427,8 +427,10 @@ impl Context<'_> {
             }
 
             Pt::Assert(art) => {
-                self.lazyness_incoming(sctx, Tr::Need, Tr::Need, |this, _| {
-                    this.push("(async ()=>{await ");
+                self.lazyness_incoming(sctx, Tr::FlushFront, Tr::Force, |this, _| {
+                    // NOTE: we rely on the impl.detail of lazyness_incoming
+                    // here that no parens are inserted between => and { ... }
+                    this.push("{await ");
                     this.push(NIX_BUILTINS_RT);
                     this.push(".assert(");
                     let cond = if let Some(cond) = art.condition() {
@@ -453,7 +455,7 @@ impl Context<'_> {
                         art.body(),
                         "body for assert",
                     )?;
-                    this.push("); })()");
+                    this.push("); }");
                     Ok(())
                 })?;
             }
