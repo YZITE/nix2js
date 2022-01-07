@@ -104,7 +104,7 @@ function buildRT(opath) {
                 // weirdly named anchor...
                 case "Store":
                     if (!nix_path_parsed) {
-                        return Error(opath + ": export not supported: " + anchor + "|" + xpath);
+                        return new nixBlti.NixEvalError(opath + ": export not supported: " + anchor + "|" + xpath);
                     }
                     let parts = xpath.split(path.sep);
                     if (nix_path_parsed.lookup[parts[0]] !== undefined) {
@@ -118,7 +118,7 @@ function buildRT(opath) {
                                 return tmp;
                             } catch(e) { }
                         }
-                        return Error(opath + ": export did not resolve: " + anchor + "|" + xpath)
+                        return new nixBlti.NixEvalError(opath + ": export did not resolve: " + anchor + "|" + xpath)
                     })();
 
                 default:
