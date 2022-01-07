@@ -83,6 +83,13 @@ impl Context<'_> {
         ret
     }
 
+    fn is_ident_wellknown(&self, id: &Ident) -> bool {
+        matches!(
+            id.as_str(),
+            "abort" | "builtins" | "derivation" | "false" | "import" | "null" | "throw" | "true"
+        )
+    }
+
     fn translate_node_ident(&mut self, sctx: Option<StackCtx>, id: &Ident) -> String {
         let txtrng = id.node().text_range();
         // if we don't make this conditional, we would record
@@ -777,13 +784,30 @@ impl Context<'_> {
             Pt::Root(r) => self.rtv(sctx, txtrng, r.inner(), "inner for root")?,
 
             Pt::Select(sel) => {
-                self.lazyness_incoming(sctx, Tr::Need, Tr::Need, Ladj::Front, |this, _| {
-                    this.rtv(mksctx!(Want, Nothing), txtrng, sel.set(), "set for select")?;
-                    if let Some(idx) = sel.index() {
-                        this.translate_node_key_element_indexing(&idx)?;
+                let idx = if let Some(idx) = sel.index() {
+                    idx
+                } else {
+                    return Err(format!("{:?}: index for select missing", txtrng));
+                };
+
+                let (slt, is_wellknown) = if let Some(slt) = sel.set() {
+                    if let Some(id) = Ident::cast(slt.clone()) {
+                        (slt, self.is_ident_wellknown(&id))
                     } else {
-                        return Err(format!("{:?}: {} missing", txtrng, "index for select"));
+                        (slt, false)
                     }
+                } else {
+                    return Err(format!("{:?}: set for select missing", txtrng));
+                };
+                // TODO: improve this mess
+                let (xsctx, xtr) = if is_wellknown {
+                    (mksctx!(Nothing, Nothing), Tr::Forward)
+                } else {
+                    (mksctx!(Want, Nothing), Tr::Need)
+                };
+                self.lazyness_incoming(sctx, xtr, xtr, Ladj::Front, |this, _| {
+                    this.translate_node(xsctx, slt)?;
+                    this.translate_node_key_element_indexing(&idx)?;
                     TranslateResult::Ok(())
                 })?;
             }
