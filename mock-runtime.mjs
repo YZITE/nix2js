@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import { constants as fsconsts } from 'node:fs';
 import path from 'node:path';
-import { translate } from 'nix2js-wasm';
+import { translate_inline_srcmap } from 'nix2js-wasm';
 import * as nixBlti from 'nix-builtins';
 
 function fmtTdif(tdif) {
@@ -52,7 +52,7 @@ async function importTail(real_path) {
         }
     }
     console.log('  ' + fmtTdif(process.hrtime(tstart)) + '\tloaded');
-    let [trld, srcmap] = translate(fdat, real_path);
+    let trld = translate_inline_srcmap(fdat, real_path);
     console.log('  ' + fmtTdif(process.hrtime(tstart)) + '\ttranslated');
     let stru;
     try {

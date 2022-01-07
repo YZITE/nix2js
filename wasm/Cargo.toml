@@ -12,6 +12,7 @@ crate-type = ["cdylib", "rlib"]
 console_error_panic_hook = "0.1"
 js-sys = "0.3"
 wasm-bindgen = "0.2"
+base64 = "0.13.0"
 
 [dependencies.nix2js]
 path = ".."
