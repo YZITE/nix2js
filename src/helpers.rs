@@ -12,32 +12,46 @@ pub fn escape_str(s: &str) -> String {
 }
 
 #[derive(Clone, Copy)]
-pub enum LazynessSt {
-    DidAwait,
-    WantAwait,
-    Normal,
+pub enum St {
+    Did,
+    Want,
+    Nothing,
 }
 
 #[derive(Clone, Copy)]
-pub enum LazyTr {
+pub enum Tr {
     Need,
     Forward,
 }
 
 #[derive(Clone, Copy)]
 pub struct StackCtx {
-    pub lazyness_st: LazynessSt,
-    pub insert_lazy: bool,
+    pub await_st: St,
+    pub lazy_st: St,
 }
 
 #[macro_export]
 macro_rules! mksctx {
-    ($x:ident, $il:expr) => {{
+    ($awaits:ident, $lazys:ident) => {{
         StackCtx {
-            lazyness_st: crate::helpers::LazynessSt::$x,
-            insert_lazy: $il,
+            await_st: crate::helpers::St::$awaits,
+            lazy_st: crate::helpers::St::$lazys,
         }
     }};
+}
+
+// merge expectations
+fn merge_sttr(st: St, tr: Tr) -> (St, bool) {
+    use {St::*, Tr::*};
+    let tmp = match tr {
+        Forward => Some(st),
+        Need => match st {
+            Did => Some(Did),
+            Want => None,
+            Nothing => Some(Want),
+        },
+    };
+    (tmp.unwrap_or(Did), tmp.is_some())
 }
 
 impl Context<'_> {
@@ -48,30 +62,24 @@ impl Context<'_> {
     pub(crate) fn lazyness_incoming<R>(
         &mut self,
         mut sctx: StackCtx,
-        await_tr: LazyTr,
+        await_tr: Tr,
+        lazy_tr: Tr,
         inner: impl FnOnce(&mut Self, StackCtx) -> R,
     ) -> R {
-        use {LazyTr::*, LazynessSt::*};
-        let new_lnst = match (sctx.lazyness_st, await_tr) {
-            (DidAwait, _) => Some(DidAwait),
-            (WantAwait, Forward) => Some(WantAwait),
-            (WantAwait, Need) => None,
-            (Normal, Forward) => Some(Normal),
-            (Normal, Need) => Some(WantAwait),
-        };
+        let (await_st, do_await) = merge_sttr(sctx.await_st, await_tr);
+        let (lazy_st, do_lazy) = merge_sttr(sctx.lazy_st, lazy_tr);
         let mut finisher = Vec::new();
-        sctx.lazyness_st = if let Some(x) = new_lnst {
-            x
-        } else {
+        sctx.await_st = await_st;
+        sctx.lazy_st = lazy_st;
+        if do_await {
             self.push("(await ");
             finisher.push(")");
-            DidAwait
-        };
-        if sctx.insert_lazy {
+        }
+        if do_lazy {
             self.push("nixBlti.PLazy.from(async ()=>");
             finisher.push(")");
-            sctx.lazyness_st = WantAwait;
-            sctx.insert_lazy = false;
+            sctx.await_st = St::Want;
+            sctx.lazy_st = St::Nothing;
         }
         let ret = inner(self, sctx);
         for i in finisher.iter().rev() {

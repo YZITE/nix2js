@@ -1,3 +1,5 @@
+#![forbid(unused_variables, non_snake_case)]
+
 /**
  this crate converts Nix code into javascript code, and generates code
  which is wrapped inside a function which expects a "runtime" object,
@@ -12,6 +14,7 @@
  be the objects/namespace of all exported objects of the npm package `nix-builtins`.
 **/
 // SPDX-License-Identifier: LGPL-2.1-or-later
+
 use rnix::{types::*, SyntaxNode as NixNode};
 
 mod postracker;
@@ -125,7 +128,7 @@ impl Context<'_> {
                         }
                     };
                 if let Some(sctx) = sctx {
-                    self.lazyness_incoming(sctx, LazyTr::Need, move |this, _| inner(this));
+                    self.lazyness_incoming(sctx, Tr::Need, Tr::Need, move |this, _| inner(this));
                 } else {
                     inner(self);
                 }
@@ -143,7 +146,7 @@ impl Context<'_> {
         if let Some(name) = Ident::cast(node.clone()) {
             self.translate_node_ident_escape_str(&name);
         } else {
-            self.translate_node(mksctx!(WantAwait, false), node.clone())?;
+            self.translate_node(mksctx!(Want, Nothing), node.clone())?;
         }
         Ok(())
     }
@@ -153,7 +156,7 @@ impl Context<'_> {
             self.translate_node_ident_indexing(&name);
         } else {
             self.push("[");
-            self.translate_node(mksctx!(WantAwait, false), node.clone())?;
+            self.translate_node(mksctx!(Want, Nothing), node.clone())?;
             self.push("]");
         }
         Ok(())
@@ -238,13 +241,13 @@ impl Context<'_> {
         // FIXME: how?
         if let Some(inhf) = inh.from() {
             let mut idents: Vec<_> = inh.idents().collect();
-            let inhf_sctx = mksctx!(WantAwait, false);
+            let inhf_sctx = mksctx!(Want, Nothing);
             if idents.len() == 1 {
                 let id = idents.remove(0);
                 self.push(scope);
                 self.translate_node_ident_indexing(&id);
                 self.push("=");
-                self.lazyness_incoming(value_sctx, LazyTr::Forward, |this, _| {
+                self.lazyness_incoming(value_sctx, Tr::Forward, Tr::Need, |this, _| {
                     this.rtv(
                         inhf_sctx,
                         inhf.node().text_range(),
@@ -265,7 +268,7 @@ impl Context<'_> {
                     "nixInhR"
                 };
                 self.push("=");
-                self.lazyness_incoming(inhf_sctx, LazyTr::Need, |this, sctx| {
+                self.lazyness_incoming(inhf_sctx, Tr::Need, Tr::Need, |this, sctx| {
                     this.rtv(
                         sctx,
                         inhf.node().text_range(),
@@ -278,7 +281,7 @@ impl Context<'_> {
                     self.push(scope);
                     self.translate_node_ident_indexing(&id);
                     self.push("=");
-                    self.lazyness_incoming(value_sctx, LazyTr::Forward, |this, _| {
+                    self.lazyness_incoming(value_sctx, Tr::Forward, Tr::Need, |this, _| {
                         this.push(inhf_var);
                         this.translate_node_ident_indexing(&id);
                     });
@@ -328,7 +331,7 @@ impl Context<'_> {
             })
             && node.inherits().next().is_none()
         {
-            self.lazyness_incoming(body_sctx, LazyTr::Forward, |this, _| {
+            self.lazyness_incoming(body_sctx, Tr::Forward, Tr::Need, |this, _| {
                 // optimization: use real object
                 this.push("Object.assign(Object.create(null),{");
                 let inner = |this: &mut Self, i: KeyValue| {
@@ -336,7 +339,7 @@ impl Context<'_> {
                         &Ident::cast(i.key().unwrap().path().next().unwrap()).unwrap(),
                     );
                     this.push(":");
-                    this.translate_node(mksctx!(Normal, false), i.value().unwrap())?;
+                    this.translate_node(mksctx!(Nothing, Nothing), i.value().unwrap())?;
                     TranslateResult::Ok(())
                 };
                 let mut it = node.entries();
@@ -349,7 +352,7 @@ impl Context<'_> {
                 Ok(())
             })
         } else {
-            self.lazyness_incoming(body_sctx, LazyTr::Need, |this, _| {
+            self.lazyness_incoming(body_sctx, Tr::Need, Tr::Need, |this, _| {
                 this.push(&format!("(async {}=>{{", scope));
                 for i in node.entries() {
                     this.translate_node_kv(value_sctx, i, scope)?;
@@ -364,7 +367,7 @@ impl Context<'_> {
                 }
                 this.push("return ");
                 match body {
-                    LetBody::Nix(body) => this.translate_node(mksctx!(WantAwait, false), body)?,
+                    LetBody::Nix(body) => this.translate_node(mksctx!(Want, Nothing), body)?,
                     LetBody::ExtractScope => {
                         this.push(&format!("{}[{}]", scope, NIX_EXTRACT_SCOPE))
                     }
@@ -400,17 +403,17 @@ impl Context<'_> {
 
         match x {
             Pt::Apply(app) => {
-                self.lazyness_incoming(sctx, LazyTr::Need, |this, _| {
+                self.lazyness_incoming(sctx, Tr::Need, Tr::Need, |this, _| {
                     this.push("(");
                     this.rtv(
-                        mksctx!(WantAwait, false),
+                        mksctx!(Want, Nothing),
                         txtrng,
                         app.lambda(),
                         "lambda for application",
                     )?;
                     this.push(")(");
                     this.rtv(
-                        mksctx!(Normal, false),
+                        mksctx!(Nothing, Nothing),
                         txtrng,
                         app.value(),
                         "value for application",
@@ -421,7 +424,7 @@ impl Context<'_> {
             }
 
             Pt::Assert(art) => {
-                self.lazyness_incoming(sctx, LazyTr::Need, |this, _| {
+                self.lazyness_incoming(sctx, Tr::Need, Tr::Need, |this, _| {
                     this.push("(async ()=>{await ");
                     this.push(NIX_BUILTINS_RT);
                     this.push(".assert(");
@@ -439,10 +442,10 @@ impl Context<'_> {
                         cond.text()
                     )));
                     this.push(",");
-                    this.translate_node(mksctx!(Normal, false), cond)?;
+                    this.translate_node(mksctx!(Nothing, Nothing), cond)?;
                     this.push("); return (");
                     this.rtv(
-                        mksctx!(WantAwait, false),
+                        mksctx!(Want, Nothing),
                         txtrng,
                         art.body(),
                         "body for assert",
@@ -460,7 +463,11 @@ impl Context<'_> {
                 };
                 self.translate_let(
                     sctx,
-                    mksctx!(Normal, ars.recursive()),
+                    if ars.recursive() {
+                        mksctx!(Nothing, Want)
+                    } else {
+                        mksctx!(Nothing, Nothing)
+                    },
                     &ars,
                     LetBody::ExtractScope,
                     scope,
@@ -481,7 +488,7 @@ impl Context<'_> {
                     Bok::IsSet => {
                         self.push("Object.prototype.hasOwnProperty.call(");
                         self.rtv(
-                            mksctx!(WantAwait, false),
+                            mksctx!(Want, Nothing),
                             txtrng,
                             bo.lhs(),
                             "lhs for binop ?",
@@ -491,7 +498,7 @@ impl Context<'_> {
                             if let Some(y) = Ident::cast(x.clone()) {
                                 self.translate_node_ident_escape_str(&y);
                             } else {
-                                self.translate_node(mksctx!(WantAwait, false), x)?;
+                                self.translate_node(mksctx!(Want, Nothing), x)?;
                             }
                         } else {
                             return Err(format!(
@@ -502,8 +509,8 @@ impl Context<'_> {
                         self.push(")");
                     }
                     _ => {
-                        self.lazyness_incoming(sctx, LazyTr::Need, |this, _| {
-                            let mysctx = mksctx!(Normal, false);
+                        self.lazyness_incoming(sctx, Tr::Need, Tr::Need, |this, _| {
+                            let mysctx = mksctx!(Nothing, Nothing);
                             this.push(&format!("{}.{:?}(", NIX_OPERATORS, op));
                             this.rtv(mysctx, txtrng, bo.lhs(), "lhs for binop")?;
                             this.push(",");
@@ -527,10 +534,10 @@ impl Context<'_> {
             }
 
             Pt::IfElse(ie) => {
-                self.lazyness_incoming(sctx, LazyTr::Forward, |this, sctx| {
+                self.lazyness_incoming(sctx, Tr::Forward, Tr::Need, |this, sctx| {
                     this.push("((");
                     this.rtv(
-                        mksctx!(WantAwait, false),
+                        mksctx!(Want, Nothing),
                         txtrng,
                         ie.condition(),
                         "condition for if-else",
@@ -561,7 +568,7 @@ impl Context<'_> {
                 };
                 // FIXME: use guard to truncate vars
                 let cur_lamstk = self.vars.len();
-                const BODY_SCTX: StackCtx = mksctx!(WantAwait, false);
+                const BODY_SCTX: StackCtx = mksctx!(Want, Nothing);
                 self.push("(async ");
                 if let Some(y) = Ident::cast(argx.clone()) {
                     let yas = y.as_str();
@@ -596,7 +603,7 @@ impl Context<'_> {
                             self.translate_node_ident_escape_str(&z);
                             if let Some(zdfl) = i.default() {
                                 self.push(",");
-                                self.translate_node(mksctx!(Normal, true), zdfl)?;
+                                self.translate_node(mksctx!(Nothing, Want), zdfl)?;
                             }
                             self.push(");");
                         } else {
@@ -618,7 +625,7 @@ impl Context<'_> {
 
             Pt::LegacyLet(l) => self.translate_let(
                 sctx,
-                mksctx!(Normal, true),
+                mksctx!(Nothing, Want),
                 &l,
                 LetBody::Nix(
                     l.entries()
@@ -650,7 +657,7 @@ impl Context<'_> {
 
             Pt::LetIn(l) => self.translate_let(
                 sctx,
-                mksctx!(Normal, true),
+                mksctx!(Nothing, Want),
                 &l,
                 LetBody::Nix(l.body().ok_or_else(|| {
                     format!(
@@ -670,23 +677,23 @@ impl Context<'_> {
                     } else {
                         self.push(",");
                     }
-                    self.translate_node(mksctx!(Normal, false), i)?;
+                    self.translate_node(mksctx!(Nothing, Nothing), i)?;
                 }
                 self.push("]");
             }
 
             Pt::OrDefault(od) => {
-                self.lazyness_incoming(sctx, LazyTr::Need, |this, _| {
+                self.lazyness_incoming(sctx, Tr::Need, Tr::Need, |this, _| {
                     this.push(&format!("{}(", NIX_OR_DEFAULT));
                     this.rtv(
-                        mksctx!(Normal, true),
+                        mksctx!(Nothing, Want),
                         txtrng,
                         od.index().map(|i| i.node().clone()),
                         "or-default without indexing operation",
                     )?;
                     this.push(",()=>");
                     this.rtv(
-                        mksctx!(Normal, true),
+                        mksctx!(Nothing, Want),
                         txtrng,
                         od.default(),
                         "or-default without default",
@@ -707,9 +714,9 @@ impl Context<'_> {
             Pt::Root(r) => self.rtv(sctx, txtrng, r.inner(), "inner for root")?,
 
             Pt::Select(sel) => {
-                self.lazyness_incoming(sctx, LazyTr::Need, |this, _| {
+                self.lazyness_incoming(sctx, Tr::Need, Tr::Need, |this, _| {
                     this.rtv(
-                        mksctx!(WantAwait, false),
+                        mksctx!(Want, Nothing),
                         txtrng,
                         sel.set(),
                         "set for select",
@@ -725,7 +732,7 @@ impl Context<'_> {
 
             Pt::Str(s) => {
                 use rnix::value::StrPart as Sp;
-                self.lazyness_incoming(sctx, LazyTr::Forward, |this, _| {
+                self.lazyness_incoming(sctx, Tr::Forward, Tr::Need, |this, _| {
                     match s.parts()[..] {
                         [] => this.push("\"\""),
                         [Sp::Literal(ref lit)] => this.push(&escape_str(lit)),
@@ -752,7 +759,7 @@ impl Context<'_> {
                                         this.push("(");
                                         let txtrng = ast.node().text_range();
                                         this.rtv(
-                                            mksctx!(WantAwait, false),
+                                            mksctx!(Want, Nothing),
                                             txtrng,
                                             ast.inner(),
                                             "inner for str-interpolate",
@@ -769,7 +776,7 @@ impl Context<'_> {
             }
 
             Pt::StrInterpol(si) => self.rtv(
-                mksctx!(WantAwait, false),
+                mksctx!(Want, Nothing),
                 txtrng,
                 si.inner(),
                 "inner for str-interpolate",
@@ -782,7 +789,7 @@ impl Context<'_> {
                 }
                 self.push(&format!("{}.u_{:?}(", NIX_OPERATORS, uo.operator()));
                 self.rtv(
-                    mksctx!(Normal, false),
+                    mksctx!(Nothing, Nothing),
                     txtrng,
                     uo.value(),
                     "value for unary-op",
@@ -824,14 +831,14 @@ impl Context<'_> {
             Pt::With(with) => {
                 self.push(&format!("(async {}=>(", NIX_IN_SCOPE));
                 self.rtv(
-                    mksctx!(WantAwait, false),
+                    mksctx!(Want, Nothing),
                     txtrng,
                     with.body(),
                     "body for 'with' scope",
                 )?;
                 self.push(&format!("))(nixBlti.mkScopeWith({},", NIX_IN_SCOPE));
                 self.rtv(
-                    mksctx!(WantAwait, false),
+                    mksctx!(Want, Nothing),
                     txtrng,
                     with.namespace(),
                     "namespace for 'with' scope",
@@ -876,7 +883,7 @@ pub fn translate(s: &str, inp_name: &str) -> Result<(String, String), Vec<String
         lp_src: Default::default(),
         lp_dst: Default::default(),
     }
-    .translate_node(mksctx!(Normal, true), parsed.node()))
+    .translate_node(mksctx!(Nothing, Want), parsed.node()))
     {
         Ok(()) => {}
         Err(e) => return Err(vec![e]),
