@@ -8,6 +8,9 @@ pub enum IdentCateg {
     // lambda argument
     LambdaArg,
 
+    // used for simple let..in stmts
+    LetLetVar,
+
     // also used for recursive attrsets
     LetInScopeVar,
 

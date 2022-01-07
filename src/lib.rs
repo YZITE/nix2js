@@ -80,13 +80,13 @@ impl Context<'_> {
         }
     }
 
-    fn translate_node_ident(
+    fn translate_node_ident_raw(
         &mut self,
         sctx: Option<StackCtx>,
-        id: &Ident,
-    ) -> Result<String, String> {
-        let categ = self.resolve_ident(id)?;
-        let vn = id.as_str();
+        txtrng: rnix::TextRange,
+        vn: &str,
+        categ: IdentCateg,
+    ) -> String {
         let startpos = self.acc.len();
 
         // needed to skip the lazy part for attrset access...
@@ -104,27 +104,25 @@ impl Context<'_> {
         };
 
         match categ {
-            IdentCateg::Literal(lit) => {
-                self.snapshot_ident(id.node().text_range(), |this| this.push(lit))
-            }
-            IdentCateg::AlBuiltin("builtins") => {
-                self.snapshot_ident(id.node().text_range(), |this| {
-                    this.push(NIX_BUILTINS_RT);
-                })
-            }
-            IdentCateg::AlBuiltin(ablti) => self.snapshot_ident(id.node().text_range(), |this| {
+            IdentCateg::Literal(lit) => self.snapshot_ident(txtrng, |this| this.push(lit)),
+            IdentCateg::AlBuiltin("builtins") => self.snapshot_ident(txtrng, |this| {
+                this.push(NIX_BUILTINS_RT);
+            }),
+            IdentCateg::AlBuiltin(ablti) => self.snapshot_ident(txtrng, |this| {
                 this.push(NIX_BUILTINS_RT);
                 this.push(".");
                 this.push(ablti.strip_prefix("__").unwrap_or(ablti));
             }),
-            IdentCateg::LambdaArg => handle_lazyness(self, &mut |this: &mut Self| {
-                this.snapshot_ident(id.node().text_range(), |this| {
-                    this.push(NIX_LAMBDA_ARG_PFX);
-                    this.push(&vn.replace("-", "_$_").replace("'", "_$"));
+            IdentCateg::LambdaArg | IdentCateg::LetLetVar => {
+                handle_lazyness(self, &mut |this: &mut Self| {
+                    this.snapshot_ident(txtrng, |this| {
+                        this.push(NIX_LAMBDA_ARG_PFX);
+                        this.push(&vn.replace("-", "_$_").replace("'", "_$"));
+                    })
                 })
-            }),
+            }
             _ => handle_lazyness(self, &mut |this: &mut Self| {
-                this.snapshot_ident(id.node().text_range(), |this| {
+                this.snapshot_ident(txtrng, |this| {
                     this.push(NIX_IN_SCOPE);
                     this.push(&if attrelem_raw_safe(vn) {
                         format!(".{}", vn)
@@ -134,11 +132,20 @@ impl Context<'_> {
                 })
             }),
         }
-        Ok(if let Some(x) = ret {
+        if let Some(x) = ret {
             x
         } else {
             self.acc[startpos..].to_string()
-        })
+        }
+    }
+
+    fn translate_node_ident(
+        &mut self,
+        sctx: Option<StackCtx>,
+        id: &Ident,
+    ) -> Result<String, String> {
+        let categ = self.resolve_ident(id)?;
+        Ok(self.translate_node_ident_raw(sctx, id.node().text_range(), id.as_str(), categ))
     }
 
     fn translate_node_key_element_force_str(&mut self, node: &NixNode) -> TranslateResult {
@@ -161,11 +168,29 @@ impl Context<'_> {
         Ok(())
     }
 
+    fn translate_node_scope_indexing(
+        &mut self,
+        k: &NixNode,
+        scope: Option<&str>,
+    ) -> TranslateResult {
+        if let Some(scope) = scope {
+            self.push(scope);
+            self.translate_node_key_element_indexing(k)?;
+        } else {
+            self.translate_node_ident(
+                None,
+                &Ident::cast(k.clone())
+                    .ok_or_else(|| format!("expected ident-key @ {}", k.text()))?,
+            )?;
+        }
+        Ok(())
+    }
+
     fn translate_node_kv(
         &mut self,
         value_sctx: StackCtx,
         i: KeyValue,
-        scope: &str,
+        scope: Option<&str>,
     ) -> TranslateResult {
         let txtrng = i.node().text_range();
         let (kpfi, kpr);
@@ -199,24 +224,25 @@ impl Context<'_> {
         };
 
         if kpr.is_empty() {
-            self.push(scope);
-            self.translate_node_key_element_indexing(&kpfi)?;
+            self.translate_node_scope_indexing(&kpfi, scope)?;
             self.push("=");
             self.translate_node(value_sctx, value)?;
             self.push(";");
         } else {
-            self.push(&format!(
-                "if(!Object.prototype.hasOwnProperty.call({},",
-                scope
-            ));
-            self.translate_node_key_element_force_str(&kpfi)?;
-            self.push(&format!(")){}", scope)); /* } */
-            self.translate_node_key_element_indexing(&kpfi)?;
-            self.push("=Object.create(null);");
-            self.push(&format!("await {}._deepMerge({}", NIX_OPERATORS, scope));
+            if let Some(scope) = scope {
+                self.push(&format!(
+                    "if(!Object.prototype.hasOwnProperty.call({},",
+                    scope
+                ));
+                self.translate_node_key_element_force_str(&kpfi)?;
+                self.push(&format!(")){}", scope)); /* } */
+                self.translate_node_key_element_indexing(&kpfi)?;
+                self.push("=Object.create(null);");
+            }
+            self.push(&format!("await {}._deepMerge(", NIX_OPERATORS));
             // this is a bit cheating because we directly override
             // parts of the attrset instead of round-tripping thru $`scope`.
-            self.translate_node_key_element_indexing(&kpfi)?;
+            self.translate_node_scope_indexing(&kpfi, scope)?;
             self.push(",");
             self.translate_node(value_sctx, value)?;
             for i in kpr {
@@ -232,7 +258,7 @@ impl Context<'_> {
         &mut self,
         value_sctx: StackCtx,
         inh: Inherit,
-        scope: &str,
+        scope: Option<&str>,
         use_inhtmp: Option<String>,
     ) -> TranslateResult {
         // inherit may be used in self-referential attrsets,
@@ -243,8 +269,7 @@ impl Context<'_> {
             let inhf_sctx = mksctx!(Want, Nothing);
             if idents.len() == 1 {
                 let id = idents.remove(0);
-                self.push(scope);
-                self.translate_node_ident_indexing(&id);
+                self.translate_node_scope_indexing(id.node(), scope)?;
                 self.push("=");
                 self.lazyness_incoming(
                     value_sctx,
@@ -289,8 +314,7 @@ impl Context<'_> {
                 )?;
                 self.push(";");
                 for id in idents {
-                    self.push(scope);
-                    self.translate_node_ident_indexing(&id);
+                    self.translate_node_scope_indexing(id.node(), scope)?;
                     self.push("=");
                     self.lazyness_incoming(
                         value_sctx,
@@ -311,8 +335,7 @@ impl Context<'_> {
             }
         } else {
             for id in inh.idents() {
-                self.push(scope);
-                self.translate_node_ident_indexing(&id);
+                self.translate_node_scope_indexing(id.node(), scope)?;
                 self.push("=");
                 self.translate_node_ident(Some(value_sctx), &id)?;
                 self.push(";");
@@ -341,6 +364,23 @@ impl Context<'_> {
             mksctx!(Nothing, Want)
         } else {
             mksctx!(Nothing, Nothing)
+        };
+        let getkeys = |node: &EH| {
+            let mut tmp: Vec<_> = node
+                .entries()
+                .flat_map(|i| i.key().and_then(|j| j.path().next()))
+                .chain(
+                    node.inherits()
+                        .flat_map(|i| i.idents())
+                        .map(|i| i.node().clone()),
+                )
+                .flat_map(|i| {
+                    Ident::cast(i).map(|j| (j.node().text_range(), j.as_str().to_string()))
+                })
+                .collect();
+            tmp.sort_unstable_by_key(|i| i.1.clone());
+            tmp.dedup_by_key(|i| i.1.clone());
+            tmp
         };
         if scope != NIX_IN_SCOPE
             && matches!(body, LetBody::ExtractScope)
@@ -410,35 +450,78 @@ impl Context<'_> {
                     Ok(())
                 },
             )
-        } else {
-            self.lazyness_incoming(body_sctx, Tr::Need, Tr::Forward, Ladj::Front, |this, _| {
-                this.push(&format!("(async {}=>{{", scope));
+        } else if scope == NIX_IN_SCOPE
+            && !matches!(body, LetBody::ExtractScope)
+            && node.entries().all(|i| {
+                i.value().is_some()
+                    && i.key()
+                        .and_then(|j| j.path().next())
+                        .map(|j| Ident::cast(j).is_some())
+                        == Some(true)
+            })
+            && node
+                .inherits()
+                .all(|i| i.from().is_none() || i.idents().count() == 1)
+        {
+            // use normal let-variables instead of attrset-like scopes if possible
+            // to aid the garbage collector
+            self.lazyness_incoming(body_sctx, Tr::Forward, Tr::Force, Ladj::Front, |this, _| {
                 let orig_vstkl = this.vars.len();
-                if scope == NIX_IN_SCOPE {
-                    for i in node
-                        .entries()
-                        .flat_map(|i| i.key().and_then(|j| j.path().next()))
-                        .chain(
-                            node.inherits()
-                                .flat_map(|i| i.idents())
-                                .map(|i| i.node().clone()),
-                        )
-                    {
-                        if let Some(x) = Ident::cast(i) {
-                            // register variable names
-                            this.vars
-                                .push((x.as_str().to_string(), IdentCateg::LetInScopeVar));
-                        }
+                let mut fi = true;
+                this.push("{let ");
+                for (irng, i) in getkeys(node) {
+                    if fi {
+                        fi = false;
+                    } else {
+                        this.push(",");
                     }
+                    // register variable names
+                    let idup = i.clone();
+                    this.vars.push((i, IdentCateg::LetLetVar));
+                    this.translate_node_ident_raw(None, irng, &*idup, IdentCateg::LetLetVar);
                 }
+                this.push(";");
                 for i in node.entries() {
-                    this.translate_node_kv(value_sctx, i, scope)?;
+                    this.translate_node_kv(value_sctx, i, None)?;
                 }
                 for (n, i) in node.inherits().enumerate() {
                     this.translate_node_inherit(
                         value_sctx,
                         i,
-                        scope,
+                        None,
+                        Some(format!("nixInhR{}", n)),
+                    )?;
+                }
+                this.push("return ");
+                match body {
+                    LetBody::Nix(body) => this.translate_node(mksctx!(Want, Nothing), body)?,
+                    LetBody::ExtractScope => {
+                        this.push(&format!("{}[{}]", scope, NIX_EXTRACT_SCOPE))
+                    }
+                }
+                this.push(";}");
+                assert!(this.vars.len() >= orig_vstkl);
+                this.vars.truncate(orig_vstkl);
+                Ok(())
+            })
+        } else {
+            self.lazyness_incoming(body_sctx, Tr::Need, Tr::Forward, Ladj::Front, |this, _| {
+                this.push(&format!("(async {}=>{{", scope));
+                let orig_vstkl = this.vars.len();
+                if scope == NIX_IN_SCOPE {
+                    for (_, i) in getkeys(node) {
+                        // register variable names
+                        this.vars.push((i, IdentCateg::LetInScopeVar));
+                    }
+                }
+                for i in node.entries() {
+                    this.translate_node_kv(value_sctx, i, Some(scope))?;
+                }
+                for (n, i) in node.inherits().enumerate() {
+                    this.translate_node_inherit(
+                        value_sctx,
+                        i,
+                        Some(scope),
                         Some(format!("nixInhR{}", n)),
                     )?;
                 }
@@ -624,7 +707,7 @@ impl Context<'_> {
                 })?;
             }
 
-            Pt::Inherit(inh) => self.translate_node_inherit(sctx, inh, NIX_IN_SCOPE, None)?,
+            Pt::Inherit(inh) => self.translate_node_inherit(sctx, inh, Some(NIX_IN_SCOPE), None)?,
 
             Pt::InheritFrom(inhf) => {
                 self.rtv(sctx, txtrng, inhf.inner(), "inner for inherit-from")?
