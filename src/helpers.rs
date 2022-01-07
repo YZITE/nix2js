@@ -86,13 +86,15 @@ impl Context<'_> {
             self.push("(await ");
             finisher.push(")");
         }
-        if do_lazy {
+        // we omit the lazy part if that would result in a-l-a
+        let lta = matches!(await_tr, Tr::Forward | Tr::FlushFront);
+        if do_lazy && (!do_await || lta) {
             self.push("nixBlti.PLazy.from(async ()=>");
             finisher.push(")");
             sctx.await_st = St::Want;
             sctx.lazy_st = St::Nothing;
 
-            if !matches!(await_tr, Tr::Forward | Tr::FlushFront) {
+            if !lta {
                 self.push("(await ");
                 finisher.push(")");
                 sctx.await_st = St::Did;

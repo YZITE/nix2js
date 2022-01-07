@@ -267,7 +267,7 @@ impl Context<'_> {
                     "nixInhR"
                 };
                 self.push("=");
-                self.lazyness_incoming(inhf_sctx, Tr::Need, Tr::Need, |this, sctx| {
+                self.lazyness_incoming(inhf_sctx, Tr::Need, Tr::FlushFront, |this, sctx| {
                     this.rtv(
                         sctx,
                         inhf.node().text_range(),
@@ -669,17 +669,20 @@ impl Context<'_> {
             )?,
 
             Pt::List(l) => {
-                self.push("[");
-                let mut fi = true;
-                for i in l.items() {
-                    if fi {
-                        fi = false;
-                    } else {
-                        self.push(",");
+                self.lazyness_incoming(sctx, Tr::Forward, Tr::FlushFront, |this, _| {
+                    this.push("[");
+                    let mut fi = true;
+                    for i in l.items() {
+                        if fi {
+                            fi = false;
+                        } else {
+                            this.push(",");
+                        }
+                        this.translate_node(mksctx!(Nothing, Nothing), i)?;
                     }
-                    self.translate_node(mksctx!(Nothing, Nothing), i)?;
-                }
-                self.push("]");
+                    this.push("]");
+                    TranslateResult::Ok(())
+                })?;
             }
 
             Pt::OrDefault(od) => {
