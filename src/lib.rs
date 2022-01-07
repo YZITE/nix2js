@@ -332,24 +332,32 @@ impl Context<'_> {
                         j.path().count() == 1 && Ident::cast(j.path().next().unwrap()).is_some()
                     }) == Some(true)
             })
-            && node.inherits().next().is_none()
+            && node.inherits().all(|i| i.from().is_none())
         {
             self.lazyness_incoming(body_sctx, Tr::Forward, Tr::Forward, |this, _| {
                 // optimization: use real object
                 this.push("Object.assign(Object.create(null),{");
-                let inner = |this: &mut Self, i: KeyValue| {
+                let mut fi = true;
+                let mut handle_fi = move |this: &mut Self| {
+                    if fi {
+                        fi = false;
+                    } else {
+                        this.push(",");
+                    }
+                };
+                for i in node.entries() {
+                    handle_fi(this);
                     this.translate_node_ident_escape_str(
                         &Ident::cast(i.key().unwrap().path().next().unwrap()).unwrap(),
                     );
                     this.push(":");
                     this.translate_node(value_sctx, i.value().unwrap())?;
-                    TranslateResult::Ok(())
-                };
-                let mut it = node.entries();
-                inner(this, it.next().unwrap())?;
-                for i in it {
-                    this.push(",");
-                    inner(this, i)?;
+                }
+                for i in node.inherits().flat_map(|inh| inh.idents()) {
+                    handle_fi(this);
+                    this.translate_node_ident_escape_str(&i);
+                    this.push(":");
+                    this.translate_node_ident(Some(value_sctx), &i);
                 }
                 this.push("})");
                 Ok(())
