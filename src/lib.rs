@@ -105,7 +105,7 @@ impl Context<'_> {
                         |this: &mut Self| match this.vars.iter().rev().find(|(ref i, _)| vn == i) {
                             Some((_, Sv::LambdaArg)) => {
                                 this.push(NIX_LAMBDA_ARG_PFX);
-                                this.push(&vn.replace("-", "___"));
+                                this.push(&vn.replace("-", "_$_").replace("'", "_$"));
                             }
                             None => {
                                 this.push(NIX_IN_SCOPE);
