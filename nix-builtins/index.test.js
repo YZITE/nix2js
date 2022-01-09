@@ -201,6 +201,28 @@ describe("tryEval", function () {
     })();
     assert_eq(await xblti.tryEval(x), { success: false, value: false });
   });
+  it("should work for impure.nix/try<nixpkgs-overlays>", async function() {
+    assert_eq(await PLazy.from(async () => {
+      let nix__try = async (nix__x) => async (nix__def) =>
+        PLazy.from(async () => {
+          let nix__res = PLazy.from(
+            async () => await xblti.tryEval(nix__x)
+          );
+          return await ((await (
+            await nix__res
+          ).success)
+            ? (
+                await nix__res
+              ).value
+            : nix__def);
+        });
+      return await (
+        await (
+          await nix__try
+        )(xblti.toString((async () => { throw new NixEvalError('path-overlays.nix: export did not resolve: Store|nixpkgs-overlays'); })()))
+      )("");
+    }), "");
+  });
 });
 
 describe("+", function () {

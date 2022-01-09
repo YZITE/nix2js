@@ -98,7 +98,7 @@ function buildRT(opath) {
                 // weirdly named anchor...
                 case "Store":
                     if (!nix_path_parsed) {
-                        return new nixBlti.NixEvalError(opath + ": export not supported: " + anchor + "|" + xpath);
+                        throw new nixBlti.NixEvalError(opath + ": export not supported: " + anchor + "|" + xpath);
                     }
                     let parts = xpath.split(path.sep);
                     if (nix_path_parsed.lookup.hasOwnProperty(parts[0])) {
@@ -112,11 +112,11 @@ function buildRT(opath) {
                                 return tmp;
                             } catch(e) { }
                         }
-                        return new nixBlti.NixEvalError(opath + ": export did not resolve: " + anchor + "|" + xpath)
+                        throw new nixBlti.NixEvalError(opath + ": export did not resolve: " + anchor + "|" + xpath)
                     })();
 
                 default:
-                    return Error(opath + ": export not supported: " + anchor + "|" + xpath);
+                    throw Error(opath + ": export not supported: " + anchor + "|" + xpath);
             }
         },
         'import': import_,
