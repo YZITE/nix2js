@@ -1,4 +1,4 @@
-import { initRtDep, allKeys, extractScope, mkScope, mkScopeWith, ScopeError, nixOp } from "./index.js";
+import { initRtDep, allKeys, extractScope, mkScope, mkScopeWith, ScopeError, NixEvalError, nixOp, PLazy } from "./index.js";
 import { isEqual } from 'lodash-es';
 import assert from 'webassert';
 
@@ -147,7 +147,17 @@ describe('compareVersions', function() {
         assert_eq(await xblti.compareVersions("2.3pre1")("2.3q"), -1, "(16)");
         assert_eq(await xblti.compareVersions("2.3q")("2.3pre1"), 1, "(17)");
     });
-})
+});
+
+describe('tryEval', function() {
+    it('should work for PLazy.from', async function() {
+        assert_eq(await xblti.tryEval(PLazy.from(async () => { throw new NixEvalError('boo'); })), { success: false, value: false });
+    });
+    it('should work for async indirection', async function() {
+        let x = (async () => { throw new NixEvalError('boo'); })();
+        assert_eq(await xblti.tryEval(x), { success: false, value: false });
+    });
+});
 
 describe('+', function() {
     it('should work if arguments are correct', async function() {
