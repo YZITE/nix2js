@@ -14,8 +14,7 @@ let setImmediatePromise = () => new Promise(resolve => {
     setImmediate(resolve);
 });
 
-const rel_path_cache = {};
-const import_cache = {};
+export const import_cache = new Map();
 
 let nix_path_parsed = (() => {
     let nixpath = process.env.NIX_PATH;
@@ -55,16 +54,18 @@ async function importTail(real_path) {
         }
     }
     try {
-        console.log('  ' + fmtTdif(process.hrtime(tstart)) + '\tloaded');
+        console.log(real_path + '  ' + fmtTdif(process.hrtime(tstart)) + '\tloaded');
         let trld = translate_inline_srcmap(fdat, real_path);
-        console.log('  ' + fmtTdif(process.hrtime(tstart)) + '\ttranslated');
+        console.log(real_path + '  ' + fmtTdif(process.hrtime(tstart)) + '\ttranslated');
         let stru;
         stru = (new Function('nixRt', 'nixBlti', trld));
         // call the yield here to allow any hanging events to proceed
-        await setImmediatePromise();
+        //await setImmediatePromise();
         stru = stru(buildRT(real_path), nixBlti);
-        console.log('  ' + fmtTdif(process.hrtime(tstart)) + '\tevaluated');
-        import_cache[real_path] = stru;
+        console.log(real_path + '  ' + fmtTdif(process.hrtime(tstart)) + '\tevaluated');
+        import_cache.set(real_path, stru);
+        console.debug(real_path + '  -res-> ');
+        console.debug(stru);
         return stru;
     } catch (e) {
         console.log(real_path, e);
@@ -77,7 +78,10 @@ export function import_(xpath) {
         return xpath.then(import_);
     if (xpath instanceof Error)
         throw xpath;
-    return import_cache[xpath] = importTail(xpath);
+    if (!import_cache.has(xpath)) {
+        import_cache.set(xpath, importTail(xpath));
+    }
+    return import_cache.get(xpath);
 }
 
 function buildRT(opath) {
