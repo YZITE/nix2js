@@ -266,7 +266,6 @@ impl Context<'_> {
         // FIXME: how?
         if let Some(inhf) = inh.from() {
             let mut idents: Vec<_> = inh.idents().collect();
-            let inhf_sctx = mksctx!(Want, Nothing);
             if idents.len() == 1 {
                 let id = idents.remove(0);
                 self.translate_node_scope_indexing(id.node(), scope)?;
@@ -278,7 +277,7 @@ impl Context<'_> {
                     Ladj::Front,
                     |this, _| {
                         this.rtv(
-                            inhf_sctx,
+                            mksctx!(Want, Nothing),
                             inhf.node().text_range(),
                             inhf.inner(),
                             "inner for inherit-from",
@@ -299,8 +298,8 @@ impl Context<'_> {
                 };
                 self.push("=");
                 self.lazyness_incoming(
-                    inhf_sctx,
-                    Tr::Need,
+                    mksctx!(Nothing, Want),
+                    Tr::Forward,
                     Tr::Flush,
                     Ladj::Front,
                     |this, sctx| {
@@ -315,18 +314,9 @@ impl Context<'_> {
                 self.push(";");
                 for id in idents {
                     self.translate_node_scope_indexing(id.node(), scope)?;
-                    self.push("=");
-                    self.lazyness_incoming(
-                        value_sctx,
-                        Tr::Forward,
-                        Tr::Need,
-                        Ladj::Front,
-                        |this, _| {
-                            this.push(inhf_var);
-                            this.translate_node_ident_indexing(&id);
-                        },
-                    );
-                    self.push(";");
+                    self.push(&format!("={}.then(nixV=>nixV", inhf_var));
+                    self.translate_node_ident_indexing(&id);
+                    self.push(");");
                 }
                 if use_inhtmp.is_none() {
                     self.push("})()");
