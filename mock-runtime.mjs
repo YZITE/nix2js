@@ -120,6 +120,13 @@ function buildRT(opath) {
             }
         },
         'import': import_,
-        'pathExists': async xpath => await fs.access(await xpath, fsconsts.R_OK),
+        'pathExists': async xpath => {
+            try {
+                await fs.access(await xpath, fsconsts.R_OK);
+                return true;
+            } catch(e) {
+                return false;
+            }
+        },
     };
 }
