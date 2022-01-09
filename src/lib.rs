@@ -616,7 +616,9 @@ impl Context<'_> {
                 } else {
                     "nixAttrsScope"
                 };
-                self.translate_let(sctx, ars.recursive(), &ars, LetBody::ExtractScope, scope)?;
+                // NOTE: force lazyness by now because of fixpoint patterns,
+                // which make it harder to decide what to use...
+                self.translate_let(sctx, true, &ars, LetBody::ExtractScope, scope)?;
             }
 
             Pt::BinOp(bo) => {
