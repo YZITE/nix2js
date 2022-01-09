@@ -646,10 +646,14 @@ const IndepBltis = {
 
   genList: (gen_) => async (len) =>
     Array({ length: tyforce_number(await len) }, (dummy, i) => gen_(i)),
-  getEnv: async (s) =>
-    typeof process !== "undefined" && typeof process.env !== "undefined"
-      ? process.env[tyforce_string(await s)]
-      : "",
+  getEnv: async (s) => {
+    if (typeof process === "undefined" || !process.hasOwnProperty('env'))
+      return "";
+    s = tyforce_string(await s);
+    return process.env.hasOwnProperty(s)
+      ? process.env[s]
+      : "";
+  },
   groupBy: (f) => async (list) => _.groupBy(tyforce_list(await list), await f),
 
   hasAttr: (s) => async (aset) =>
