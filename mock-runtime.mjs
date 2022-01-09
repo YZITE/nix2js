@@ -10,6 +10,10 @@ function fmtTdif(tdif) {
     return secs.toString() + "s " + millis.toFixed(3).toString() + "ms";
 }
 
+let setImmediatePromise = () => new Promise(resolve => {
+    setImmediate(resolve);
+});
+
 const rel_path_cache = {};
 const import_cache = {};
 
@@ -56,6 +60,8 @@ async function importTail(real_path) {
         console.log('  ' + fmtTdif(process.hrtime(tstart)) + '\ttranslated');
         let stru;
         stru = (new Function('nixRt', 'nixBlti', trld));
+        // call the yield here to allow any hanging events to proceed
+        await setImmediatePromise();
         stru = stru(buildRT(real_path), nixBlti);
         console.log('  ' + fmtTdif(process.hrtime(tstart)) + '\tevaluated');
         import_cache[real_path] = stru;

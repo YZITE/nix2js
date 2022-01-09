@@ -34,6 +34,7 @@ inside of the node REPL, type the following to setup some baseline env:
 // going directly to `impure.nix` avoids confrontation with missing nix-version stuff
 // we must use an absolute path for the initial file
 
+let wtf = require('wtfnode');
 let nixRtFe = await import('./mock-runtime.mjs');
 let a = await nixRtFe.import_(path.resolve(process.env.HOME,'devel/nixpkgs/pkgs/top-level/impure.nix'));
 let b = await a({localSystem:{system:'x86_64-linux'}});
