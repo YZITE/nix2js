@@ -97,6 +97,9 @@ function buildRT(opath) {
             }
             switch (anchor) {
                 case "Relative":
+                    if (opath === path.resolve(process.env.HOME,'devel/nixpkgs/lib/systems/inspect.nix') && xpath === './parse.nix') {
+                        throw Error(opath + ': manual mutual-recursion breaker');
+                    }
                     return path.resolve(dirnam, xpath);
 
                 case "Absolute":
