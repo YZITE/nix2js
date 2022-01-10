@@ -86,7 +86,7 @@ describe("mkScopeWith", function () {
     }
   });
 
-  it("should propagate get requests", function () {
+  it("should propagate get requests", async function () {
     let scbase = mkScopeWith();
     let sc1 = mkScope(scbase);
     sc1["x"] = 1;
@@ -101,7 +101,7 @@ describe("mkScopeWith", function () {
         "error message"
       );
     }
-    assert_eq(sc2["x"], 1, "(get)");
+    assert_eq(await sc2.x, 1, "(get)");
   });
 });
 

@@ -83,8 +83,6 @@ export function mkScope(orig?: null | object): object {
     // "Object prototype may only be an Object or null"
     orig = null;
   }
-  // we need to handle mkScope()
-  let orig_keys = orig ? () => Object.keys(orig) : () => [];
   // Object.create prevents prototype pollution
   let current = Object.create(orig);
   // self-referential properties
@@ -138,18 +136,30 @@ const readOnlyHandler = {
   },
 };
 
-export function mkScopeWith(...objs: object[]): object {
+export function mkScopeWith(...objs: MaybePromise<object>[]): object {
   let handler = Object.create(readOnlyHandler);
   handler.get = (target, key) => {
     if (key in target) {
       return target[key];
     } else {
-      let tmp = objs.find((obj) => key in obj);
-      return tmp !== undefined ? tmp[key] : undefined;
+      return PLazy.from(async () => {
+        for (let obj of objs) {
+          obj = await obj;
+          // we can't trust the `in` operator
+          let tmp = await obj[key];
+          if (tmp !== undefined) {
+            return tmp;
+          }
+        }
+      });
     }
   };
-  handler.has = (target, key) =>
-    key in target || objs.some((obj) => key in obj);
+  if (!objs.some(obj => (obj instanceof Promise))) {
+    // we can't return Promise's from the `has` handler
+    // `has` will have false-negatives
+    handler.has = (target, key) =>
+      key in target || objs.some((obj) => key in obj);
+  }
   return new Proxy(Object.create(null), handler);
 }
 
@@ -343,8 +353,9 @@ const nixToStringHandler = {
     // "A list, in which case the string representations of its elements are joined with spaces."
     if (x instanceof Array)
       return (await Promise.all(x.map(nixToString))).join(" ");
-    if ("toString" in x) return x.toString();
-    if ("__toString" in x) return x["__toString"](x);
+    // TODO: check if this is sufficient in regards to potentially lazy scopes
+    if ("toString" in x) return (await x.toString)();
+    if ("__toString" in x) return (await x["__toString"])(x);
     if ("outPath" in x) return x["outPath"];
     throw new NixEvalError(
       "nixToString: unserializable object type " + x.constructor.name

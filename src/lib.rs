@@ -1023,7 +1023,7 @@ impl Context<'_> {
                 self.with_stack -= 1;
                 self.push(&format!("))(nixBlti.mkScopeWith({},", NIX_IN_SCOPE));
                 self.rtv(
-                    mksctx!(Want, Nothing),
+                    mksctx!(Nothing, Want),
                     txtrng,
                     with.namespace(),
                     "namespace for 'with' scope",
