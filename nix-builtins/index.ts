@@ -74,9 +74,6 @@ export const fixObjectProto = (...objs) =>
 
 export class ScopeError extends Error {}
 
-// used to get all keys present in a scope, including inherited ones
-export const allKeys = Symbol("__all__");
-
 // used to get the current scope, but detached from it's parent scope and
 // without the proxy wrapper.
 export const extractScope = Symbol("__dict__");
@@ -91,9 +88,6 @@ export function mkScope(orig?: null | object): object {
   // Object.create prevents prototype pollution
   let current = Object.create(orig);
   // self-referential properties
-  Object.defineProperty(current, allKeys, {
-    get: () => Object.keys(current).concat(orig_keys()).filter(onlyUnique),
-  });
   Object.defineProperty(current, extractScope, {
     get: () => fixObjectProto(current),
   });
@@ -156,19 +150,7 @@ export function mkScopeWith(...objs: object[]): object {
   };
   handler.has = (target, key) =>
     key in target || objs.some((obj) => key in obj);
-  return new Proxy(
-    Object.create(null, {
-      [allKeys]: {
-        get: () =>
-          objs
-            .map((obj) => obj[allKeys])
-            .flat()
-            .filter((i) => i !== undefined)
-            .filter(onlyUnique),
-      },
-    }),
-    handler
-  );
+  return new Proxy(Object.create(null), handler);
 }
 
 const splitVersion = (s) =>

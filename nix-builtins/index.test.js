@@ -1,5 +1,4 @@
 import {
-  allKeys,
   extractScope,
   initRtDep,
   mkScope,
@@ -41,7 +40,6 @@ describe("mkScope", function () {
         "'set' on proxy: trap returned falsish for property 'a'"
       );
     }
-    assert_eq(sc[allKeys], ["a", "b"]);
   });
 
   it("shouldn't allow direct modifications of prototype", function () {
@@ -68,8 +66,6 @@ describe("mkScope", function () {
     sc2["a"] = 2;
     assert_eq(sc1["a"], 1, "(2)");
     assert_eq(sc2["a"], 2, "(3)");
-    assert_eq(sc1[allKeys], ["a"], "(4)");
-    assert_eq(sc2[allKeys], ["a"], "(5)");
     assert_eq(sc1[extractScope], { a: 1 }, "(6)");
     assert_eq(sc2[extractScope], { a: 2 }, "(7)");
   });
@@ -105,8 +101,6 @@ describe("mkScopeWith", function () {
         "error message"
       );
     }
-    assert_eq(sc1[allKeys], ["x"], "(keys1)");
-    assert_eq(sc2[allKeys], ["x"], "(keys2)");
     assert_eq(sc2["x"], 1, "(get)");
   });
 });
